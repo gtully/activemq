@@ -139,4 +139,6 @@ public interface Transport extends Service {
      * @return a counter which gets incremented as data is read from the transport.
      */
     int getReceiveCounter();
+
+    void available();
 }

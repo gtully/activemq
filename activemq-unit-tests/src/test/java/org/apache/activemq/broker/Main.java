@@ -41,43 +41,12 @@ public final class Main {
      */
     public static void main(String[] args) {
         try {
-            BrokerService broker = new BrokerService();
-            broker.setPersistent(false);
-
-            // String brokerDir = "xbean:...;
-            // System.setProperty("activemq.base", brokerDir);
-            // BrokerService broker = BrokerFactory.createBroker(new URI(brokerDir + "/activemq.xml"));
-
-            // for running on Java 5 without mx4j
-            ManagementContext managementContext = broker.getManagementContext();
-            managementContext.setFindTigerMbeanServer(true);
-            managementContext.setUseMBeanServer(true);
-            managementContext.setCreateConnector(false);
-
-            broker.setUseJmx(true);
-            // broker.setPlugins(new BrokerPlugin[] { new
-            // ConnectionDotFilePlugin(), new UDPTraceBrokerPlugin() });
-            broker.addConnector("tcp://localhost:61616");
-            broker.addConnector("stomp://localhost:61613");
+            String brokerUrl = "xbean:/Users/gtully/code/activemq.gits/assembly/src/release/examples/conf/activemq-specjms.xml";
+            System.setProperty("activemq.data", "/Users/gtully/code/activemq.gits/activemq-unit-tests/target");
+            BrokerService broker = BrokerFactory.createBroker(brokerUrl);
             broker.start();
-
-            // lets publish some messages so that there is some stuff to browse
-            DefaultQueueSender.main(new String[] {"Prices.Equity.IBM"});
-            DefaultQueueSender.main(new String[] {"Prices.Equity.MSFT"});
-
-            // lets create a dummy couple of consumers
-            if (createConsumers) {
-                Connection connection = new ActiveMQConnectionFactory().createConnection();
-                connection.start();
-                Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-                session.createConsumer(new ActiveMQQueue("Orders.IBM"));
-                session.createConsumer(new ActiveMQQueue("Orders.MSFT"), "price > 100");
-                Session session2 = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-                session2.createConsumer(new ActiveMQQueue("Orders.MSFT"), "price > 200");
-            } else {
-                // Lets wait for the broker
-                broker.waitUntilStopped();
-            }
+            // Lets wait for the broker
+            broker.waitUntilStopped();
         } catch (Exception e) {
             System.out.println("Failed: " + e);
             e.printStackTrace();

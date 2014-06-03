@@ -144,6 +144,11 @@ public class TransportFilter implements TransportListener, Transport {
         return next.getReceiveCounter();
     }
 
+    @Override
+    public void available() {
+        next.available();
+    }
+
     public boolean isReconnectSupported() {
         return next.isReconnectSupported();
     }

@@ -17,11 +17,6 @@
  */
 package org.apache.activemq.openwire.v4;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-
-import org.apache.activemq.openwire.*;
 import org.apache.activemq.command.*;
 
 
@@ -72,7 +67,7 @@ public class ConsumerInfoTest extends BaseCommandTestSupport {
         }
         info.setAdditionalPredicate(createBooleanExpression("AdditionalPredicate:6"));
         info.setNetworkSubscription(false);
-        info.setOptimizedAcknowledge(true);
+        info.setBrokerDispatchAcknowledge(true);
         info.setNoRangeAcks(false);
         {
             ConsumerId value[] = new ConsumerId[2];

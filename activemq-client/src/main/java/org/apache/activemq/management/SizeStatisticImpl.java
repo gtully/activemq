@@ -51,17 +51,19 @@ public class SizeStatisticImpl extends StatisticImpl{
     }
 
     public synchronized void addSize(long size) {
-        count++;
-        totalSize += size;
-        if (size > maxSize) {
-            maxSize = size;
-        }
-        if (size < minSize || minSize == 0) {
-            minSize = size;
-        }
-        updateSampleTime();
-        if (parent != null) {
-            parent.addSize(size);
+        if (isEnabled()) {
+            count++;
+            totalSize += size;
+            if (size > maxSize) {
+                maxSize = size;
+            }
+            if (size < minSize || minSize == 0) {
+                minSize = size;
+            }
+            updateSampleTime();
+            if (parent != null) {
+                parent.addSize(size);
+            }
         }
     }
 

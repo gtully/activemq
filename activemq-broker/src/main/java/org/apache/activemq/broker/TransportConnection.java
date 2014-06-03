@@ -202,7 +202,7 @@ public class TransportConnection implements Connection, Task, CommandVisitor {
             if (TRANSPORTLOG.isDebugEnabled()) {
                 TRANSPORTLOG.debug(this + " failed: " + e, e);
             } else if (TRANSPORTLOG.isWarnEnabled() && !expected(e)) {
-                TRANSPORTLOG.warn(this + " failed: " + e);
+                TRANSPORTLOG.warn(this + " failed: " + e, e);
             }
             stopAsync();
         }
@@ -241,6 +241,7 @@ public class TransportConnection implements Connection, Task, CommandVisitor {
      */
     @Override
     public void serviceException(Throwable e) {
+        e.printStackTrace();
         // are we a transport exception such as not being able to dispatch
         // synchronously to a transport
         if (e instanceof IOException) {
@@ -406,6 +407,11 @@ public class TransportConnection implements Connection, Task, CommandVisitor {
     }
 
     @Override
+    public void available() {
+        this.transport.available();
+    }
+
+    @Override
     public Response processEndTransaction(TransactionInfo info) throws Exception {
         // No need to do anything. This packet is just sent by the client
         // make sure he is synced with the server as commit command could
@@ -551,6 +557,7 @@ public class TransportConnection implements Connection, Task, CommandVisitor {
         }
         SessionState ss = cs.getSessionState(sessionId);
         if (ss == null) {
+            LOG.error("no session for producer id" + info.getProducerId());
             throw new IllegalStateException("Cannot add a producer to a session that had not been registered: "
                     + sessionId);
         }
@@ -569,6 +576,8 @@ public class TransportConnection implements Connection, Task, CommandVisitor {
                 broker.removeProducer(cs.getContext(), info);
             }
 
+        }  else {
+            LOG.error("Got duplicate producer id");
         }
         return null;
     }

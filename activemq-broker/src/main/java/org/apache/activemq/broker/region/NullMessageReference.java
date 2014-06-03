@@ -125,4 +125,14 @@ final class NullMessageReference implements QueueMessageReference {
         return false;
     }
 
+    @Override
+    public Subscription getSub() {
+        return null;
+    }
+
+    @Override
+    public void setSub(Subscription s) {
+
+    }
+
 }

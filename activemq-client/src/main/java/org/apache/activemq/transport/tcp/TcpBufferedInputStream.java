@@ -19,6 +19,7 @@ package org.apache.activemq.transport.tcp;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.ArrayBlockingQueue;
 
 /**
  * An optimized buffered input stream for Tcp
@@ -26,30 +27,78 @@ import java.io.InputStream;
  * 
  */
 public class TcpBufferedInputStream extends FilterInputStream {
-    private static final int DEFAULT_BUFFER_SIZE = 8192;
     protected byte internalBuffer[];
     protected int count;
     protected int position;
 
-    public TcpBufferedInputStream(InputStream in) {
-        this(in, DEFAULT_BUFFER_SIZE);
+    static class ReadAheadBuffer {
+        volatile int available;
+        volatile byte[] buffer;
     }
+    int flip = 0;
+    int skip = 0;
+    ArrayBlockingQueue<ReadAheadBuffer> readAheadQueue = new ArrayBlockingQueue<ReadAheadBuffer>(1, true);
+    Thread readAheadThread;
+    ReadAheadBuffer[] readAheadBuffers = new ReadAheadBuffer[3];
+    final boolean useReadAhead = false;
 
-    public TcpBufferedInputStream(InputStream in, int size) {
+    public TcpBufferedInputStream(final InputStream in, final int size) {
         super(in);
         if (size <= 0) {
             throw new IllegalArgumentException("Buffer size <= 0");
         }
-        internalBuffer = new byte[size];
+        if (useReadAhead) {
+        for (int i=0;i<readAheadBuffers.length;i++) {
+            readAheadBuffers[i] = new ReadAheadBuffer();
+            readAheadBuffers[i].buffer = new byte[size];
+            readAheadBuffers[i].available = 0;
+        }
+
+        readAheadThread = new Thread(null, new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    while (true) {
+                        ReadAheadBuffer nextRead = readAheadBuffers[(flip++)%3];
+                        nextRead.available = in.read(nextRead.buffer, 0, size);
+                        readAheadQueue.put(nextRead);
+                        //System.err.println(flip + ", Put:" + nextRead + ", " + nextRead.available);
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "Stream read ahead " + this);
+        readAheadThread.start();
+        } else {
+            internalBuffer = new byte[size];
+        }
     }
 
     protected void fill() throws IOException {
-        byte[] buffer = internalBuffer;
-        count = 0;
+
+        if (useReadAhead) {
+        ReadAheadBuffer readBuffer = null;
+        try {
+            readBuffer = readAheadQueue.take();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        internalBuffer = readBuffer.buffer;
+        count = readBuffer.available > 0 ? readBuffer.available : 0;
+        //System.err.println("fill " + internalBuffer + ", count="+ count);
         position = 0;
-        int n = in.read(buffer, position, buffer.length - position);
-        if (n > 0) {
-            count = n + position;
+        } else {
+
+            byte[] buffer = internalBuffer;
+            count = 0;
+            position = 0;
+            int n = in.read(buffer, position, buffer.length - position);
+            if (n > 0) {
+                count = n + position;
+            }
         }
     }
 

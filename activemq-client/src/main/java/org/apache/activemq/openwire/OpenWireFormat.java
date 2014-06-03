@@ -170,6 +170,7 @@ public final class OpenWireFormat implements WireFormat {
             sequence = bytesOut.toByteSequence();
         }
 
+        sequence.command = command;
         return sequence;
     }
 
@@ -473,6 +474,9 @@ public final class OpenWireFormat implements WireFormat {
         if (o != null) {
             byte type = o.getDataStructureType();
             dataOut.writeByte(type);
+            if (type == 45) {
+                Thread.dumpStack();
+            }
             DataStreamMarshaller dsm = (DataStreamMarshaller)dataMarshallers[type & 0xFF];
             if (dsm == null) {
                 throw new IOException("Unknown data type: " + type);

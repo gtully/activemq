@@ -101,7 +101,7 @@ public class ConsumerInfoMarshaller extends BaseCommandMarshaller {
                                                                                                             dataIn,
                                                                                                             bs));
         info.setNetworkSubscription(bs.readBoolean());
-        info.setOptimizedAcknowledge(bs.readBoolean());
+        info.setBrokerDispatchAcknowledge(bs.readBoolean());
         info.setNoRangeAcks(bs.readBoolean());
 
     }
@@ -126,7 +126,7 @@ public class ConsumerInfoMarshaller extends BaseCommandMarshaller {
         rc += tightMarshalObjectArray1(wireFormat, info.getBrokerPath(), bs);
         rc += tightMarshalNestedObject1(wireFormat, (DataStructure)info.getAdditionalPredicate(), bs);
         bs.writeBoolean(info.isNetworkSubscription());
-        bs.writeBoolean(info.isOptimizedAcknowledge());
+        bs.writeBoolean(info.isBrokerDispatchAcknowledge());
         bs.writeBoolean(info.isNoRangeAcks());
 
         return rc + 9;
@@ -207,7 +207,7 @@ public class ConsumerInfoMarshaller extends BaseCommandMarshaller {
                                                                                                             wireFormat,
                                                                                                             dataIn));
         info.setNetworkSubscription(dataIn.readBoolean());
-        info.setOptimizedAcknowledge(dataIn.readBoolean());
+        info.setBrokerDispatchAcknowledge(dataIn.readBoolean());
         info.setNoRangeAcks(dataIn.readBoolean());
 
     }
@@ -235,7 +235,7 @@ public class ConsumerInfoMarshaller extends BaseCommandMarshaller {
         looseMarshalObjectArray(wireFormat, info.getBrokerPath(), dataOut);
         looseMarshalNestedObject(wireFormat, (DataStructure)info.getAdditionalPredicate(), dataOut);
         dataOut.writeBoolean(info.isNetworkSubscription());
-        dataOut.writeBoolean(info.isOptimizedAcknowledge());
+        dataOut.writeBoolean(info.isBrokerDispatchAcknowledge());
         dataOut.writeBoolean(info.isNoRangeAcks());
 
     }

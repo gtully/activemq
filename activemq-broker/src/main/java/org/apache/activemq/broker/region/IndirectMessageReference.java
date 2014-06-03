@@ -38,6 +38,8 @@ public class IndirectMessageReference implements QueueMessageReference {
     /** Direct reference to the message */
     private final Message message;
     private final MessageId messageId;
+
+    private Subscription subscription;
     
     /**
      * @param message
@@ -162,5 +164,15 @@ public class IndirectMessageReference implements QueueMessageReference {
 
     public boolean isAdvisory() {
        return message.isAdvisory();
+    }
+
+    @Override
+    public Subscription getSub() {
+        return subscription;
+    }
+
+    @Override
+    public void setSub(Subscription s) {
+        subscription = s;
     }
 }

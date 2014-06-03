@@ -157,7 +157,12 @@ public class MockTransport extends DefaultTransportListener implements Transport
     public int getReceiveCounter() {
         return getNext().getReceiveCounter();
     }
-    
+
+    @Override
+    public void available() {
+
+    }
+
 
     public boolean isReconnectSupported() {
         return getNext().isReconnectSupported();

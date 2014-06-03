@@ -32,6 +32,13 @@ public class OrderedPendingList implements PendingList {
     private PendingNode tail = null;
     private final Map<MessageId, PendingNode> map = new HashMap<MessageId, PendingNode>();
 
+    public OrderedPendingList() {
+    }
+
+    public OrderedPendingList(MessageReference message) {
+        addMessageFirst(message);
+    }
+
     public PendingNode addMessageFirst(MessageReference message) {
         PendingNode node = new PendingNode(this, message);
         if (root == null) {

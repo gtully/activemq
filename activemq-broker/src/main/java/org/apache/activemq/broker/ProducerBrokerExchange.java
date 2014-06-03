@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.activemq.broker.region.Destination;
 import org.apache.activemq.broker.region.Region;
+import org.apache.activemq.broker.region.Subscription;
 import org.apache.activemq.command.Message;
 import org.apache.activemq.command.MessageId;
 import org.apache.activemq.state.ProducerState;
@@ -44,6 +45,7 @@ public class ProducerBrokerExchange {
     private boolean isNetworkProducer;
     private BrokerService brokerService;
     private final FlowControlInfo flowControlInfo = new FlowControlInfo();
+    public Subscription directDispathSub;
 
     public ProducerBrokerExchange() {
     }
@@ -55,6 +57,7 @@ public class ProducerBrokerExchange {
         rc.region = region;
         rc.producerState = producerState;
         rc.mutable = mutable;
+        rc.directDispathSub = directDispathSub;
         return rc;
     }
 

@@ -470,4 +470,9 @@ public class UdpTransport extends TransportThreadSupport implements Transport, S
         }
         return commandChannel.getReceiveCounter();
     }
+
+    @Override
+    public void available() {
+
+    }
 }

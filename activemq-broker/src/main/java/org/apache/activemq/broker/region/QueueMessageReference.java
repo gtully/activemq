@@ -39,4 +39,7 @@ public interface QueueMessageReference extends MessageReference {
     boolean unlock();
     
     LockOwner getLockOwner();
+
+    Subscription getSub();
+    void setSub(Subscription s);
 }

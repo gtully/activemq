@@ -772,6 +772,8 @@ public abstract class BaseDestination implements Destination {
         return answer;
     }
 
+    protected final ConnectionContext brokerConnectionContext = createConnectionContext();
+
     protected MessageAck convertToNonRangedAck(MessageAck ack, MessageReference node) {
         // the original ack may be a ranged ack, but we are trying to delete
         // a specific

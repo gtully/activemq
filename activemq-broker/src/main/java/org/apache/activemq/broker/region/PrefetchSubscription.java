@@ -22,6 +22,37 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.jms.JMSException;
+
+import org.apache.activemq.broker.Broker;
+import org.apache.activemq.broker.ConnectionContext;
+import org.apache.activemq.broker.region.cursors.PendingMessageCursor;
+import org.apache.activemq.broker.region.cursors.VMPendingMessageCursor;
+import org.apache.activemq.command.ConsumerControl;
+import org.apache.activemq.command.ConsumerInfo;
+import org.apache.activemq.command.Message;
+import org.apache.activemq.command.MessageAck;
+import org.apache.activemq.command.MessageDispatch;
+import org.apache.activemq.command.MessageDispatchNotification;
+import org.apache.activemq.command.MessageId;
+import org.apache.activemq.command.MessagePull;
+import org.apache.activemq.command.Response;
+import org.apache.activemq.thread.Scheduler;
+import org.apache.activemq.transaction.Synchronization;
+import org.apache.activemq.transport.TransmitCallback;
+import org.apache.activemq.usage.SystemUsage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.jms.JMSException;
@@ -66,7 +97,7 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
     protected final SystemUsage usageManager;
     protected final Object pendingLock = new Object();
     protected final Object dispatchLock = new Object();
-    private final CountDownLatch okForAckAsDispatchDone = new CountDownLatch(1);
+    private final AtomicBoolean okForAckAsDispatchDone = new AtomicBoolean(false);
 
     public PrefetchSubscription(Broker broker, SystemUsage usageManager, ConnectionContext context, ConsumerInfo info, PendingMessageCursor cursor) throws JMSException {
         super(broker,context, info);
@@ -145,6 +176,14 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
 
     @Override
     public void add(MessageReference node) throws Exception {
+
+        if (info.isBrokerDispatchAcknowledge()) {
+            synchronized (dispatchLock) {
+                dispatch(node);
+                acknowledge(context, new MessageAck(node.getMessage(), MessageAck.INDIVIDUAL_ACK_TYPE, 1));
+            }
+        } else {
+        boolean bypass = false;
         synchronized (pendingLock) {
             // The destination may have just been removed...
             if( !destinations.contains(node.getRegionDestination()) && node!=QueueMessageReference.NULL_MESSAGE) {
@@ -156,9 +195,19 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
             if (!node.equals(QueueMessageReference.NULL_MESSAGE)) {
                 enqueueCounter++;
             }
-            pending.addMessageLast(node);
+            if (pending.isEmpty()) {
+                synchronized (dispatchLock) {
+                    dispatch(node);
+                    bypass = true;
+                }
+            } else {
+                pending.addMessageLast(node);
+            }
         }
-        dispatchPending();
+        if (!bypass) {
+            dispatchPending();
+        }
+            }
     }
 
     @Override
@@ -197,7 +246,7 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
         boolean callDispatchMatched = false;
         Destination destination = null;
 
-        if (!okForAckAsDispatchDone.await(0l, TimeUnit.MILLISECONDS)) {
+        if (!okForAckAsDispatchDone.get()) {
             // suppress unexpected ack exception in this expected case
             LOG.warn("Ignoring ack received before dispatch; result of failover with an outstanding ack. Acked messages will be replayed if present on this broker. Ignored ack: {}", ack);
             return;
@@ -405,14 +454,18 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
                 }
             }
         }
+        if (info.isBrokerDispatchAcknowledge()) {
+            return;
+        }
         if (callDispatchMatched && destination != null) {
             destination.wakeup();
-            dispatchPending();
-
             if (pending.isEmpty()) {
                 for (Destination dest : destinations) {
                     dest.wakeup();
                 }
+            }
+            if (!pending.isEmpty()) {
+                dispatchPending();
             }
         } else {
             LOG.debug("Acknowledgment out of sync (Normally occurs when failover connection reconnects): {}", ack);
@@ -667,6 +720,13 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
                                 }
                                 dispatch(node);
                                 count++;
+                                if (info.isBrokerDispatchAcknowledge()) {
+                                    try {
+                                        acknowledge(context, new MessageAck(node.getMessage(), MessageAck.INDIVIDUAL_ACK_TYPE, 1));
+                                    } catch (Exception e) {
+                                        LOG.warn("Failed brokerDispatchAck for {}", node, e);
+                                    }
+                                }
                             }
                         }
                     }
@@ -693,7 +753,7 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
             return false;
         }
 
-        okForAckAsDispatchDone.countDown();
+        okForAckAsDispatchDone.lazySet(true);
 
         // No reentrant lock - Patch needed to IndirectMessageReference on method lock
         MessageDispatch md = createMessageDispatch(node, message);
@@ -750,7 +810,7 @@ public abstract class PrefetchSubscription extends AbstractSubscription {
             }
         }
 
-        if (info.isDispatchAsync()) {
+        if (info.isDispatchAsync() && !pending.isEmpty()) {
             try {
                 dispatchPending();
             } catch (IOException e) {

@@ -135,4 +135,6 @@ public interface Connection extends Service {
      */
     public Long getOldestActiveTransactionDuration();
 
+    void available();
+
 }

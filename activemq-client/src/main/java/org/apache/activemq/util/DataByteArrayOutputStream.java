@@ -66,7 +66,7 @@ public final class DataByteArrayOutputStream extends OutputStream implements Dat
      * start using a fresh byte array
      */
     public void restart() {
-        restart(DEFAULT_SIZE);
+        pos = 0;
     }
 
     /**

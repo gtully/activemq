@@ -20,6 +20,7 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.activemq.broker.Broker;
@@ -44,6 +45,8 @@ public class CompositeDestinationFilter extends DestinationFilter {
     private boolean forwardOnly;
     private boolean copyMessage;
     private boolean concurrentSend = false;
+    private boolean roundRobin;
+    private AtomicInteger currentDest = new AtomicInteger(0);
 
     public CompositeDestinationFilter(Destination next, Collection forwardDestinations, boolean forwardOnly, boolean copyMessage, boolean concurrentSend) {
         super(next);
@@ -51,12 +54,16 @@ public class CompositeDestinationFilter extends DestinationFilter {
         this.forwardOnly = forwardOnly;
         this.copyMessage = copyMessage;
         this.concurrentSend = concurrentSend;
+        this.roundRobin = true;
     }
 
     public void send(final ProducerBrokerExchange context, final Message message) throws Exception {
         MessageEvaluationContext messageContext = null;
 
         Collection<ActiveMQDestination> matchingDestinations = new LinkedList<ActiveMQDestination>();
+        if (roundRobin) {
+            matchingDestinations.add((ActiveMQDestination)forwardDestinations.toArray()[currentDest.getAndIncrement()%forwardDestinations.size()]);
+        } else {
         for (Iterator iter = forwardDestinations.iterator(); iter.hasNext();) {
             ActiveMQDestination destination = null;
             Object value = iter.next();
@@ -78,6 +85,7 @@ public class CompositeDestinationFilter extends DestinationFilter {
                 continue;
             }
             matchingDestinations.add(destination);
+        }
         }
 
         final CountDownLatch concurrent = new CountDownLatch(concurrentSend ? matchingDestinations.size() : 0);
@@ -106,7 +114,9 @@ public class CompositeDestinationFilter extends DestinationFilter {
         if (!forwardOnly) {
             super.send(context, message);
         }
-        concurrent.await();
+        if (concurrentSend) {
+            concurrent.await();
+        }
         if (exceptionAtomicReference.get() != null) {
             throw exceptionAtomicReference.get();
         }

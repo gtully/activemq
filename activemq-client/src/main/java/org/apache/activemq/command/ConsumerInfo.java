@@ -49,7 +49,7 @@ public class ConsumerInfo extends BaseCommand {
     protected boolean retroactive;
     protected byte priority;
     protected BrokerId[] brokerPath;
-    protected boolean optimizedAcknowledge;
+    protected boolean brokerDispatchAcknowledge;
     // used by the broker
     protected transient int currentPrefetchSize;
     // if true, the consumer will not send range
@@ -368,15 +368,15 @@ public class ConsumerInfo extends BaseCommand {
      * @openwire:property version=1
      * @return Returns the optimizedAcknowledge.
      */
-    public boolean isOptimizedAcknowledge() {
-        return optimizedAcknowledge;
+    public boolean isBrokerDispatchAcknowledge() {
+        return brokerDispatchAcknowledge;
     }
 
     /**
-     * @param optimizedAcknowledge The optimizedAcknowledge to set.
+     * @param brokerDispatchAcknowledge The optimizedAcknowledge to set.
      */
-    public void setOptimizedAcknowledge(boolean optimizedAcknowledge) {
-        this.optimizedAcknowledge = optimizedAcknowledge;
+    public void setBrokerDispatchAcknowledge(boolean brokerDispatchAcknowledge) {
+        this.brokerDispatchAcknowledge = brokerDispatchAcknowledge;
     }
 
     /**

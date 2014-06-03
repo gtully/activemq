@@ -18,9 +18,12 @@ package org.apache.activemq.transport.tcp;
 
 import org.apache.activemq.Service;
 import org.apache.activemq.TransportLoggerSupport;
+import org.apache.activemq.command.Command;
+import org.apache.activemq.openwire.OpenWireFormat;
 import org.apache.activemq.thread.TaskRunnerFactory;
 import org.apache.activemq.transport.Transport;
 import org.apache.activemq.transport.TransportThreadSupport;
+import org.apache.activemq.util.ByteSequence;
 import org.apache.activemq.util.InetAddressUtil;
 import org.apache.activemq.util.IntrospectionSupport;
 import org.apache.activemq.util.ServiceStopper;
@@ -36,8 +39,13 @@ import java.io.InterruptedIOException;
 import java.net.*;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -127,6 +135,22 @@ public class TcpTransport extends TransportThreadSupport implements Transport, S
     private Boolean keepAlive;
     private Boolean tcpNoDelay;
     private Thread runnerThread;
+    private final boolean useReadPrefetch = false;
+    protected ArrayBlockingQueue<Object> prefetch = new ArrayBlockingQueue<Object>(1, true);
+    protected Thread prefetchThread;
+
+    protected final boolean useWritePool = true;
+    final int maxPendingWrites = 40;
+    protected ArrayBlockingQueue<PendingWrite> formaters = new ArrayBlockingQueue<PendingWrite>(maxPendingWrites);
+    protected Thread writeThread;
+    protected ArrayBlockingQueue<PendingWrite> writeQeueue = new ArrayBlockingQueue<PendingWrite>(maxPendingWrites);
+    final boolean debugInOut = false;
+
+    class PendingWrite {
+        WireFormat formatter;
+        ByteSequence sequence;
+    }
+    PendingWrite[] cachedFormatters = new PendingWrite[maxPendingWrites];
 
     /**
      * Connect to a remote Node - e.g. a Broker
@@ -172,8 +196,21 @@ public class TcpTransport extends TransportThreadSupport implements Transport, S
      */
     public void oneway(Object command) throws IOException {
         checkStarted();
+
+        if (useWritePool) {
+            try {
+                PendingWrite pendingWrite = formaters.take();
+                pendingWrite.sequence = pendingWrite.formatter.marshal(command);
+                writeQeueue.put(pendingWrite);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        } else {
+
         wireFormat.marshal(command, dataOut);
         dataOut.flush();
+        }
     }
 
     /**
@@ -210,15 +247,22 @@ public class TcpTransport extends TransportThreadSupport implements Transport, S
 
     protected void doRun() throws IOException {
         try {
-            Object command = readCommand();
+            Object command = useReadPrefetch ? prefetch.take() : readCommand();
+            //System.err.println("command: " + command);
+            //if (command instanceof Command && ((Command)command).isMessage()) {
+            //    return;
+            //}
             doConsume(command);
         } catch (SocketTimeoutException e) {
         } catch (InterruptedIOException e) {
+        } catch (InterruptedException e) {
         }
     }
 
     protected Object readCommand() throws IOException {
-        return wireFormat.unmarshal(dataIn);
+        Object o = wireFormat.unmarshal(dataIn);
+        if (debugInOut) System.err.println(Thread.currentThread() + ", read:" + o);
+        return o;
     }
 
     // Properties
@@ -463,6 +507,65 @@ public class TcpTransport extends TransportThreadSupport implements Transport, S
     protected void doStart() throws Exception {
         connect();
         stoppedLatch.set(new CountDownLatch(1));
+        if (useReadPrefetch) {
+        prefetchThread = new Thread(null, new Runnable() {
+               @Override
+               public void run() {
+                       try {
+                           // need to negotiate wireformat in single thread
+                           //doConsume(readCommand());
+                           while (!isStopped()) {
+                                prefetch.put(readCommand());
+                           }
+                       } catch (InterruptedException e) {
+                           e.printStackTrace();
+                           IOException ioe=new IOException("Unexpected pre-read error occurred: " + e);
+                                       ioe.initCause(e);
+                           onException(ioe);
+
+                       } catch (IOException e) {
+                           e.printStackTrace();
+                           onException(e);
+                       }
+               }
+           }, "ActiveMQ Transport prefetch: " + toString());
+        prefetchThread.start();
+        }
+
+        if (useWritePool) {
+
+            for (int i=0;i<cachedFormatters.length;i++) {
+                cachedFormatters[i] = new PendingWrite();
+                cachedFormatters[i].formatter = ((OpenWireFormat)wireFormat).copy();
+                formaters.put(cachedFormatters[i]);
+            }
+            writeThread = new Thread(null, new Runnable() {
+                           @Override
+                           public void run() {
+                                   try {
+                                       while (!isStopped()) {
+                                           final PendingWrite pendingWrite = writeQeueue.take();
+                                           if (debugInOut) System.err.println(Thread.currentThread() + ", write: " + pendingWrite.sequence.command);
+                                           dataOut.write(pendingWrite.sequence.getData(), pendingWrite.sequence.getOffset(), pendingWrite.sequence.getLength());
+                                           dataOut.flush();
+                                           formaters.put(pendingWrite);
+                                       }
+                                   } catch (InterruptedException e) {
+                                       if (!isStopped()) {
+                                        e.printStackTrace();
+                                        IOException ioe=new IOException("Unexpected write error occurred: " + e);
+                                                   ioe.initCause(e);
+                                        onException(ioe);
+                                       }
+
+                                   } catch (IOException e) {
+                                       e.printStackTrace();
+                                       onException(e);
+                                   }
+                           }
+                       }, "ActiveMQ Transport write: " + toString());
+            writeThread.start();
+        }
         super.doStart();
     }
 
@@ -570,6 +673,10 @@ public class TcpTransport extends TransportThreadSupport implements Transport, S
                         LOG.debug("Caught exception closing socket " + socket + ". This exception will be ignored.", e);
                     }
                 }
+            }
+
+            if (useWritePool && writeThread != null) {
+                writeThread.interrupt();
             }
         }
     }
@@ -707,5 +814,10 @@ public class TcpTransport extends TransportThreadSupport implements Transport, S
 
     public WireFormat getWireFormat() {
         return wireFormat;
+    }
+
+    public void available() {
+        //released.set(Boolean.TRUE);
+        //available.release();
     }
 }

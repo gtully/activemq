@@ -40,6 +40,9 @@
         advisorySupport="false"
         enableStatistics="false"
         schedulerSupport="false"
+        useVirtualTopics="false"
+        useMirroredQueues="false"
+        persistent="false"
         useJmx="false">
 
         <destinationPolicy>
@@ -56,7 +59,7 @@
                     <vmCursor />
                   </pendingSubscriberPolicy>
                 </policyEntry>
-                <policyEntry queue=">" producerFlowControl="false" enableAudit="false" expireMessagesPeriod="0">
+                <policyEntry queue=">" producerFlowControl="false" enableAudit="false" expireMessagesPeriod="0" optimizedDispatch="true">
                   <pendingQueuePolicy>
                     <!-- keep all references in memory -->
                     <vmQueueCursor/>
@@ -79,25 +82,25 @@
             <managementContext createConnector="false"/>
         </managementContext>
 
-        <persistenceAdapter>
+        <!--persistenceAdapter -->
             <!-- defer cleanup/checkpoint -->
             <!-- write in max 62k chunks to max disk io bandwith -->
             <!-- use small number of data files (seldom switch) -->
             <!-- keep index off the disk (in cache) -->
 
-            <kahaDB directory="${activemq.data}/kahadb"
+            <!-- kahaDB directory="${activemq.data}/kahadb"
                 cleanupInterval="300000" checkpointInterval="50000"
                 journalMaxWriteBatchSize="62k"
                 journalMaxFileLength="1g"
                 indexCacheSize="100000" indexWriteBatchSize="100000"
-            />
-        </persistenceAdapter>
+            / -->
+        <!-- /persistenceAdapter -->
 
         <!-- ensure there is loads or memory for destinations -->
         <systemUsage>
             <systemUsage>
                 <memoryUsage>
-                    <memoryUsage limit="2 g"/>
+                    <memoryUsage limit="1352 mb"/>
                 </memoryUsage>
             </systemUsage>
         </systemUsage>
@@ -110,7 +113,8 @@
             http://activemq.apache.org/configuring-transports.html
         -->
         <transportConnectors>
-            <transportConnector name="openwire" uri="tcp://0.0.0.0:61616"/>
+            <transportConnector name="openwire" uri="tcp://0.0.0.0:61616?transport.useInactivityMonitor=false&amp;transport.socketBufferSize=131072&amp;transport.ioBufferSize=66560" />
+            <transportConnector name="amqp" uri="amqp://0.0.0.0:5672" />
         </transportConnectors>
 
     </broker>

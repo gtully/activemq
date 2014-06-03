@@ -16,6 +16,8 @@
  */
 package org.apache.activemq.transport;
 
+import java.util.concurrent.Semaphore;
+
 /**
  * A useful base class for a transport implementation which has a background
  * reading thread.
@@ -25,7 +27,8 @@ package org.apache.activemq.transport;
 public abstract class TransportThreadSupport extends TransportSupport implements Runnable {
 
     private boolean daemon;
-    private Thread runner;
+    private Thread[] runners = new Thread[1];
+    protected Semaphore available = new Semaphore(1, true);
     // should be a multiple of 128k
     private long stackSize;
 
@@ -38,9 +41,11 @@ public abstract class TransportThreadSupport extends TransportSupport implements
     }
 
     protected void doStart() throws Exception {
-        runner = new Thread(null, this, "ActiveMQ Transport: " + toString(), stackSize);
-        runner.setDaemon(daemon);
-        runner.start();
+        for (int i=0;i<runners.length;i++) {
+            runners[i] = new Thread(null, this, "ActiveMQ Transport["+i+"]: " + toString(), stackSize);
+            runners[i].setDaemon(daemon);
+            runners[i].start();
+        }
     }
 
     /**
@@ -56,4 +61,12 @@ public abstract class TransportThreadSupport extends TransportSupport implements
     public void setStackSize(long stackSize) {
         this.stackSize = stackSize;
     }
+
+
+  protected static final ThreadLocal<Boolean> released =
+             new ThreadLocal<Boolean>() {
+                 @Override protected Boolean initialValue() {
+                     return Boolean.FALSE;
+             }
+         };
 }

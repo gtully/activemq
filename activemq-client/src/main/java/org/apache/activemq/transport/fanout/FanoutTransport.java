@@ -621,4 +621,9 @@ public class FanoutTransport implements CompositeTransport {
         }
         return rc;
     }
+
+    @Override
+    public void available() {
+
+    }
 }

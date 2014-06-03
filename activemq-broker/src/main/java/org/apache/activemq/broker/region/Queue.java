@@ -36,7 +36,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.DelayQueue;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -326,7 +325,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
 
         public void processExpired() {
             for (Message message: toExpire) {
-                messageExpired(createConnectionContext(), createMessageReference(message));
+                messageExpired(brokerConnectionContext, createMessageReference(message));
                 // drop message will decrement so counter
                 // balance here
                 destinationStatistics.getMessages().increment();
@@ -489,7 +488,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
             // Outside of dispatchLock() to maintain the lock hierarchy of
             // iteratingMutex -> dispatchLock. - see
             // https://issues.apache.org/activemq/browse/AMQ-1878
-            wakeup();
+            asyncWakeup();
         }
     }
 
@@ -718,6 +717,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                                 + message.getProducerId() + ") stopped to prevent flooding "
                                 + getActiveMQDestination().getQualifiedName() + "."
                                 + " See http://activemq.apache.org/producer-flow-control.html for more info");
+                        warnOnProducerFlowControl = true;
                     }
 
                     // The usage manager could have delayed us by the time
@@ -816,14 +816,14 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                     iterator.remove();
                     continue;
                 }
-                sendMessage(messageContext.message);
+                sendMessage(messageContext.message, false);
                 messageContext.message.decrementReferenceCount();
             }
         }
 
         private void processSent() throws Exception {
             for (MessageContext messageContext : additions) {
-                messageSent(messageContext.context, messageContext.message);
+                messageSent(messageContext.context, null, messageContext.message, false);
             }
         }
 
@@ -901,7 +901,22 @@ public class Queue extends BaseDestination implements Task, UsageListener {
 
         producerExchange.incrementSend();
         checkUsage(context, producerExchange, message);
+
+        // direct dispatch
+        if (false && optimizedDispatch && !message.isPersistent() && producerExchange.directDispathSub != null) {
+            Subscription subscription = producerExchange.directDispathSub;
+            if (!subscription.isFull()) {
+                subscription.add(message);
+                statsAndAdvisoriesOnSend(context, message);
+                return;
+            } else {
+                System.err.println("Direct dispatch sub is full:" + subscription);
+                producerExchange.directDispathSub = null;
+            }
+        }
+        boolean directDispatch = false;
         sendLock.lockInterruptibly();
+        //context.getConnection().available();
         try {
             if (store != null && message.isPersistent()) {
                 try {
@@ -921,10 +936,10 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                     resetNeeded = true;
                     throw e;
                 }
-            }
-            // did a transaction commit beat us to the index?
-            synchronized (orderIndexUpdates) {
-                needsOrderingWithTransactions |= !orderIndexUpdates.isEmpty();
+                // did a transaction commit beat us to the index?
+                synchronized (orderIndexUpdates) {
+                    needsOrderingWithTransactions |= !orderIndexUpdates.isEmpty();
+                }
             }
             if (needsOrderingWithTransactions ) {
                 // If this is a transacted message.. increase the usage now so that
@@ -936,13 +951,13 @@ public class Queue extends BaseDestination implements Task, UsageListener {
             } else {
                 // Add to the pending list, this takes care of incrementing the
                 // usage manager.
-                sendMessage(message);
+                directDispatch = sendMessage(message, optimizedDispatch && !message.isPersistent());
             }
         } finally {
             sendLock.unlock();
         }
         if (!needsOrderingWithTransactions) {
-            messageSent(context, message);
+            messageSent(context, producerExchange, message, directDispatch);
         }
         if (result != null && message.isResponseRequired() && !result.isCancelled()) {
             try {
@@ -1183,15 +1198,14 @@ public class Queue extends BaseDestination implements Task, UsageListener {
     }
 
     public void doBrowse(List<Message> browseList, int max) {
-        final ConnectionContext connectionContext = createConnectionContext();
         try {
 
             while (shouldPageInMoreForBrowse(max)) {
                 pageInMessages(!memoryUsage.isFull(110));
             };
 
-            doBrowseList(browseList, max, pagedInPendingDispatch, pagedInPendingDispatchLock, connectionContext, "pagedInPendingDispatch");
-            doBrowseList(browseList, max, pagedInMessages, pagedInMessagesLock, connectionContext, "pagedInMessages");
+            doBrowseList(browseList, max, pagedInPendingDispatch, pagedInPendingDispatchLock, brokerConnectionContext, "pagedInPendingDispatch");
+            doBrowseList(browseList, max, pagedInMessages, pagedInMessagesLock, brokerConnectionContext, "pagedInMessages");
 
             // we need a store iterator to walk messages on disk, independent of the cursor which is tracking
             // the next message batch
@@ -1284,7 +1298,6 @@ public class Queue extends BaseDestination implements Task, UsageListener {
     }
 
     public void purge() throws Exception {
-        ConnectionContext c = createConnectionContext();
         List<MessageReference> list = null;
         do {
             doPageIn(true, false);  // signal no expiry processing needed.
@@ -1298,7 +1311,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
             for (MessageReference ref : list) {
                 try {
                     QueueMessageReference r = (QueueMessageReference) ref;
-                    removeMessage(c, r);
+                    removeMessage(brokerConnectionContext, r);
                 } catch (IOException e) {
                 }
             }
@@ -1366,7 +1379,6 @@ public class Queue extends BaseDestination implements Task, UsageListener {
     public int removeMatchingMessages(MessageReferenceFilter filter, int maximumMessages) throws Exception {
         int movedCounter = 0;
         Set<MessageReference> set = new LinkedHashSet<MessageReference>();
-        ConnectionContext context = createConnectionContext();
         do {
             doPageIn(true);
             pagedInMessagesLock.readLock().lock();
@@ -1378,9 +1390,9 @@ public class Queue extends BaseDestination implements Task, UsageListener {
             List<MessageReference> list = new ArrayList<MessageReference>(set);
             for (MessageReference ref : list) {
                 IndirectMessageReference r = (IndirectMessageReference) ref;
-                if (filter.evaluate(context, r)) {
+                if (filter.evaluate(brokerConnectionContext, r)) {
 
-                    removeMessage(context, r);
+                    removeMessage(brokerConnectionContext, r);
                     set.remove(r);
                     if (++movedCounter >= maximumMessages && maximumMessages > 0) {
                         return movedCounter;
@@ -1601,6 +1613,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                         Runnable op = it.next();
                         it.remove();
                         op.run();
+                        warnOnProducerFlowControl = true;
                     } else {
                         registerCallbackForNotFullNotification();
                         break;
@@ -1849,38 +1862,70 @@ public class Queue extends BaseDestination implements Task, UsageListener {
         }
     }
 
-    final void sendMessage(final Message msg) throws Exception {
+    final boolean sendMessage(final Message msg, boolean canBypass) throws Exception {
         messagesLock.writeLock().lock();
         try {
+            if (canBypass && messages.isEmpty()) {
+                return true;
+            }
             messages.addMessageLast(msg);
         } finally {
             messagesLock.writeLock().unlock();
         }
+        return false;
     }
 
-    final void messageSent(final ConnectionContext context, final Message msg) throws Exception {
+    final void messageSent(final ConnectionContext context, ProducerBrokerExchange producerExchange, final Message msg, boolean canDoDirectDispatch) throws Exception {
+        statsAndAdvisoriesOnSend(context, msg);
+        LOG.debug("{} Message {} sent to {}", new Object[]{ broker.getBrokerName(), msg.getMessageId(), this.destination });
+
+        if (canDoDirectDispatch) {
+            QueueMessageReference queueMessageReference = createMessageReference(msg);
+            if (!doActualDispatch(new OrderedPendingList(createMessageReference(msg))).isEmpty()) {
+                // failed to dispatch so we need to cursor/buffer
+                LOG.info(" {} no direct dispatch on enqueues {}, size {} ", this, destinationStatistics.getEnqueues().getCount(), destinationStatistics.getMessages().getCount());
+                messagesLock.writeLock().lock();
+                try {
+                    messages.addMessageLast(msg);
+                } finally {
+                    messagesLock.writeLock().unlock();
+                }
+                canDoDirectDispatch = false;
+            } else {
+                // reuse this sub for this producer till full
+                producerExchange.directDispathSub = queueMessageReference.getSub();
+            }
+        }
+
+        if (!canDoDirectDispatch) {
+            if (optimizedDispatch) {
+                iterate();
+            } else {
+                asyncWakeup();
+            }
+        }
+    }
+
+    private void statsAndAdvisoriesOnSend(ConnectionContext context, Message msg) throws Exception {
         destinationStatistics.getEnqueues().increment();
         destinationStatistics.getMessages().increment();
         destinationStatistics.getMessageSize().addSize(msg.getSize());
         messageDelivered(context, msg);
-        consumersLock.readLock().lock();
-        try {
-            if (consumers.isEmpty()) {
-                onMessageWithNoConsumers(context, msg);
+        if (isSendAdvisoryIfNoConsumers()) {
+            consumersLock.readLock().lock();
+            try {
+                if (consumers.isEmpty()) {
+                    onMessageWithNoConsumers(context, msg);
+                }
+            } finally {
+                consumersLock.readLock().unlock();
             }
-        }finally {
-            consumersLock.readLock().unlock();
         }
-        LOG.debug("{} Message {} sent to {}", new Object[]{ broker.getBrokerName(), msg.getMessageId(), this.destination });
-        wakeup();
     }
 
     @Override
     public void wakeup() {
-        if (optimizedDispatch && !iterationRunning) {
-            iterate();
-            pendingWakeups.incrementAndGet();
-        } else {
+        if (!messages.isEmpty()) {
             asyncWakeup();
         }
     }
@@ -1961,7 +2006,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                         QueueMessageReference ref = createMessageReference(node.getMessage());
                         if (processExpired && ref.isExpired()) {
                             if (broker.isExpired(ref)) {
-                                messageExpired(createConnectionContext(), ref);
+                                messageExpired(brokerConnectionContext, ref);
                             } else {
                                 ref.decrementReferenceCount();
                             }
@@ -1996,9 +2041,8 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                         // note: jdbc store will not trap unacked messages as a duplicate b/c it gives each message a unique sequence id
                         LOG.warn("{}, duplicate message {} paged in, is cursor audit disabled? Removing from store and redirecting to dlq", this, ref.getMessage());
                         if (store != null) {
-                            ConnectionContext connectionContext = createConnectionContext();
-                            store.removeMessage(connectionContext, new MessageAck(ref.getMessage(), MessageAck.POSION_ACK_TYPE, 1));
-                            broker.getRoot().sendToDeadLetterQueue(connectionContext, ref.getMessage(), null, new Throwable("duplicate paged in from store for " + destination));
+                            store.removeMessage(brokerConnectionContext, new MessageAck(ref.getMessage(), MessageAck.POSION_ACK_TYPE, 1));
+                            broker.getRoot().sendToDeadLetterQueue(brokerConnectionContext, ref.getMessage(), null, new Throwable("duplicate paged in from store for " + destination));
                         }
                     }
                 }
@@ -2089,6 +2133,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
                             LOG.trace("assigned {} to consumer {}", node.getMessageId(), s.getConsumerInfo().getConsumerId());
                             iterator.remove();
                             target = s;
+                            ((QueueMessageReference)node).setSub(s);
                             break;
                         }
                     } else {
@@ -2321,7 +2366,7 @@ public class Queue extends BaseDestination implements Task, UsageListener {
 
     @Override
     public void onUsageChanged(@SuppressWarnings("rawtypes") Usage usage, int oldPercentUsage, int newPercentUsage) {
-        if (oldPercentUsage > newPercentUsage) {
+        if (oldPercentUsage > newPercentUsage && oldPercentUsage >= cursorMemoryHighWaterMark) {
             asyncWakeup();
         }
     }

@@ -54,4 +54,9 @@ public class StubTransport extends TransportSupport {
         return receiveCounter;
     }
 
+    @Override
+    public void available() {
+
+    }
+
 }

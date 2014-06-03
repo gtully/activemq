@@ -223,7 +223,7 @@ public abstract class TransportFactory {
     public Transport configure(Transport transport, WireFormat wf, Map options) throws Exception {
         transport = compositeConfigure(transport, wf, options);
 
-        transport = new MutexTransport(transport);
+        //transport = new MutexTransport(transport);
         transport = new ResponseCorrelator(transport);
 
         return transport;

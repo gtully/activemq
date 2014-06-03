@@ -263,7 +263,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
             setOptimizedAckScheduledAckInterval(session.connection.getOptimizedAckScheduledAckInterval());
         }
 
-        this.info.setOptimizedAcknowledge(this.optimizeAcknowledge);
+        this.info.setBrokerDispatchAcknowledge(session.isBrokerDispatchAcknowledge());
         this.failoverRedeliveryWaitPeriod = session.connection.getConsumerFailoverRedeliveryWaitPeriod();
         this.nonBlockingRedelivery = session.connection.isNonBlockingRedelivery();
         this.transactedIndividualAck = session.connection.isTransactedIndividualAck() || this.nonBlockingRedelivery;
@@ -895,7 +895,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
     private void beforeMessageIsConsumed(MessageDispatch md) throws JMSException {
         md.setDeliverySequenceId(session.getNextDeliveryId());
         lastDeliveredSequenceId = md.getMessage().getMessageId().getBrokerSequenceId();
-        if (!isAutoAcknowledgeBatch()) {
+        if (!isAutoAcknowledgeBatch() && !session.isBrokerDispatchAcknowledge()) {
             synchronized(deliveredMessages) {
                 deliveredMessages.addFirst(md);
             }
@@ -927,7 +927,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
             stats.getExpiredMessageCount().increment();
         } else {
             stats.onMessage();
-            if (session.getTransacted()) {
+            if (session.getTransacted() || session.isBrokerDispatchAcknowledge()) {
                 // Do nothing.
             } else if (isAutoAcknowledgeEach()) {
                 if (deliveryingAcknowledgements.compareAndSet(false, true)) {
@@ -1431,6 +1431,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                                 }
                             }
                             if (needsPoisonAck) {
+                                // consider having a connection per consumer to avoid this
                                 LOG.warn("acking duplicate delivery as poison, redelivery must be pending to another"
                                         + " consumer on this connection, failoverRedeliveryWaitPeriod="
                                         + failoverRedeliveryWaitPeriod + ". Message: " + md);

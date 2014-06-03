@@ -429,4 +429,9 @@ public class VMTransport implements Transport, Task {
     public int getReceiveCounter() {
         return receiveCounter;
     }
+
+    @Override
+    public void available() {
+
+    }
 }

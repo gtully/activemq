@@ -191,7 +191,9 @@ public class ActiveMQSession implements Session, QueueSession, TopicSession, Sta
      * is called
      */
     public static final int INDIVIDUAL_ACKNOWLEDGE = 4;
-    public static final int MAX_ACK_CONSTANT = INDIVIDUAL_ACKNOWLEDGE;
+    public static final int BROKER_DISPATCH_ACKNOWLEDGE = 5;
+
+    public static final int MAX_ACK_CONSTANT = BROKER_DISPATCH_ACKNOWLEDGE;
 
     public static interface DeliveryListener {
         void beforeDelivery(ActiveMQSession session, Message msg);
@@ -1966,6 +1968,10 @@ public class ActiveMQSession implements Session, QueueSession, TopicSession, Sta
 
     public boolean isIndividualAcknowledge(){
         return acknowledgementMode == ActiveMQSession.INDIVIDUAL_ACKNOWLEDGE;
+    }
+
+    public boolean isBrokerDispatchAcknowledge() {
+        return acknowledgementMode == ActiveMQSession.BROKER_DISPATCH_ACKNOWLEDGE;
     }
 
     /**

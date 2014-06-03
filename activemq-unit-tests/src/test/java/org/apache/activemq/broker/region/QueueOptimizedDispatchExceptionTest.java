@@ -207,6 +207,10 @@ public class QueueOptimizedDispatchExceptionTest {
             public Long getOldestActiveTransactionDuration() {
                 return null;
             }
+
+            @Override
+            public void available() {
+            }
         });
 
         final DestinationStatistics destinationStatistics = new DestinationStatistics();

@@ -100,7 +100,7 @@ public class TcpTransportFactory extends TransportFactory {
 
         // Only need the WireFormatNegotiator if using openwire
         if (format instanceof OpenWireFormat) {
-            transport = new WireFormatNegotiator(transport, (OpenWireFormat)format, tcpTransport.getMinmumWireFormatVersion());
+            //transport = new WireFormatNegotiator(transport, (OpenWireFormat)format, tcpTransport.getMinmumWireFormatVersion());
         }
 
         return super.compositeConfigure(transport, format, options);

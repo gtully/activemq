@@ -1336,6 +1336,11 @@ public class FailoverTransport implements CompositeTransport {
         return transport.getReceiveCounter();
     }
 
+    @Override
+    public void available() {
+
+    }
+
     public int getConnectFailures() {
         return connectFailures;
     }

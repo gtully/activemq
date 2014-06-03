@@ -17,11 +17,14 @@
 
 package org.apache.activemq.util;
 
+import org.apache.activemq.command.Command;
+
 public class ByteSequence {
 
     public byte[] data;
     public int offset;
     public int length;
+    public Object command;
 
     public ByteSequence() {
     }
