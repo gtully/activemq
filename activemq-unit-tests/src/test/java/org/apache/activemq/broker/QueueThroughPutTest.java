@@ -43,6 +43,7 @@ import org.apache.activemq.jms.pool.PooledConnection;
 import org.apache.activemq.jms.pool.PooledConnectionFactory;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,12 +66,14 @@ public class QueueThroughPutTest {
     private final int parallelConsumer = threads;
     private final int producerConnections = threads;
     private final int consumerConnections = threads;
-    private final boolean asyncDispatch = true;
-    private final boolean queuePerConsumer = false;
+    private final boolean asyncDispatch = false;
+    private final boolean alwaysSyncSend = false;
+
+    private final boolean queuePerConsumer = true;
     private final boolean useVirtualQueueForLoadBalance = false;
     private final Vector<Exception> exceptions = new Vector<Exception>();
 
-    int queuePrefetch = 3000;
+    int queuePrefetch = 1000;
     int toSend = 500000;
 
     private BrokerService broker;
@@ -105,14 +108,16 @@ public class QueueThroughPutTest {
     }
 
    @Test
+   @Ignore
    public void brokerOnly() throws Exception {
        startBroker();
        broker.waitUntilStopped();
    }
 
     @Test
+    @Ignore
     public void testProduceConsume() throws Exception {
-        startBroker();
+        //startBroker();
         createConnectionFactory();
 
         final AtomicLong sharedSendCount = new AtomicLong(toSend);
@@ -177,8 +182,8 @@ public class QueueThroughPutTest {
         Connection connection = consumerConnectionFactory.createConnection();
         connection.start();
         LOG.error("Consumer connection:" + connection);
-        Session session = connection.createSession(false, ActiveMQSession.BROKER_DISPATCH_ACKNOWLEDGE);
-        //Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+        //Session session = connection.createSession(false, ActiveMQSession.BROKER_DISPATCH_ACKNOWLEDGE);
+        Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
 
         final MessageConsumer consumer = session.createConsumer(destination);
         consumer.setMessageListener(new MessageListener() {
@@ -265,7 +270,8 @@ public class QueueThroughPutTest {
     }
 
     public void createConnectionFactory() throws Exception {
-        String options = "?useInactivityMonitor=false&jms.watchTopicAdvisories=false&jms.useAsyncSend=true&jms.alwaysSessionAsync=false&jms.dispatchAsync="+ asyncDispatch
+        String options = "?useInactivityMonitor=false&jms.watchTopicAdvisories=false&jms.useAsyncSend=true&jms.alwaysSessionAsync=true&jms.dispatchAsync="+ asyncDispatch
+                + "&jms.alwaysSyncSend=" + alwaysSyncSend
                 + "&jms.prefetchPolicy.queuePrefetch=" + queuePrefetch
                 + "&jms.copyMessageOnSend=false&jms.messagePrioritySupported=false&socketBufferSize=" + socketBuffer
                 + "&ioBufferSize=" + ioBuffer
