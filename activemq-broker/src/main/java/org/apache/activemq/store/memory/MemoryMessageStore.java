@@ -28,6 +28,7 @@ import org.apache.activemq.command.ActiveMQDestination;
 import org.apache.activemq.command.Message;
 import org.apache.activemq.command.MessageAck;
 import org.apache.activemq.command.MessageId;
+import org.apache.activemq.store.IndexListener;
 import org.apache.activemq.store.MessageRecoveryListener;
 import org.apache.activemq.store.AbstractMessageStore;
 
@@ -56,6 +57,10 @@ public class MemoryMessageStore extends AbstractMessageStore {
             messageTable.put(message.getMessageId(), message);
         }
         message.incrementReferenceCount();
+        message.getMessageId().setEntryLocator(Boolean.TRUE);
+        if (indexListener != null) {
+            indexListener.onAdd(new IndexListener.MessageContext(context, message, null));
+        }
     }
 
     // public void addMessageReference(ConnectionContext context,MessageId

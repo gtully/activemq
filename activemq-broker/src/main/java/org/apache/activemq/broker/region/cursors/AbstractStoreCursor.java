@@ -16,6 +16,7 @@
  */
 package org.apache.activemq.broker.region.cursors;
 
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import org.apache.activemq.broker.region.Destination;
@@ -40,7 +41,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     protected boolean batchResetNeeded = false;
     private boolean storeHasMessages = false;
     protected int size;
-    private MessageId lastCachedId;
+    private volatile MessageId lastCachedId;
     private TransactionId lastTx;
     protected boolean hadSpace = false;
 
@@ -84,10 +85,13 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     public final boolean recoverMessage(Message message) throws Exception {
         return recoverMessage(message,false);
     }
-    
+
+    final HashMap<MessageId, Throwable> insertions = new HashMap();
     public synchronized boolean recoverMessage(Message message, boolean cached) throws Exception {
         boolean recovered = false;
         if (recordUniqueId(message.getMessageId())) {
+            // usefull to debug dup cause
+            // insertions.put(message.getMessageId(), new Throwable("insertion @"));
             if (!cached) {
                 message.setRegionDestination(regionDestination);
                 if( message.getMemoryUsage()==null ) {
@@ -103,7 +107,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
             if (LOG.isDebugEnabled()) {
                 LOG.debug(this + " - cursor got duplicate: " + message.getMessageId() + "," + message.getPriority() + ", cached=" + cached, new Throwable("duplicate message detected"));
             } else {
-                LOG.warn("{} - cursor got duplicate {}", regionDestination.getActiveMQDestination(), message.getMessageId());
+                LOG.warn("{} - cursor got duplicate {} seq: {}, lastCached: " + lastCachedId, regionDestination.getActiveMQDestination(), message.getMessageId(), message.getMessageId().getEntryLocator(), new Throwable("got dup @").initCause(insertions.get(message.getMessageId())));
             }
             if (!cached ||  message.getMessageId().getEntryLocator() != null) {
                 // came from the store or was added to the jdbc store

@@ -57,6 +57,7 @@ import org.apache.activemq.command.TransactionId;
 import org.apache.activemq.openwire.OpenWireFormat;
 import org.apache.activemq.protobuf.Buffer;
 import org.apache.activemq.store.AbstractMessageStore;
+import org.apache.activemq.store.IndexListener;
 import org.apache.activemq.store.ListenableFuture;
 import org.apache.activemq.store.MessageRecoveryListener;
 import org.apache.activemq.store.MessageStore;
@@ -104,7 +105,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
     private LinkedBlockingQueue<Runnable> asyncTopicJobQueue;
     Semaphore globalQueueSemaphore;
     Semaphore globalTopicSemaphore;
-    private boolean concurrentStoreAndDispatchQueues = true;
+    private boolean concurrentStoreAndDispatchQueues = false;
     // when true, message order may be compromised when cache is exhausted if store is out
     // or order w.r.t cache
     private boolean concurrentStoreAndDispatchTopics = false;
@@ -423,7 +424,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
         }
 
         @Override
-        public void addMessage(ConnectionContext context, Message message) throws IOException {
+        public void addMessage(final ConnectionContext context, final Message message) throws IOException {
             KahaAddMessageCommand command = new KahaAddMessageCommand();
             command.setDestination(dest);
             command.setMessageId(message.getMessageId().toProducerKey());
@@ -432,8 +433,15 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
             command.setPrioritySupported(isPrioritizedMessages());
             org.apache.activemq.util.ByteSequence packet = wireFormat.marshal(message);
             command.setMessage(new Buffer(packet.getData(), packet.getOffset(), packet.getLength()));
-            store(command, isEnableJournalDiskSyncs() && message.isResponseRequired(), null, null);
-
+            store(command, isEnableJournalDiskSyncs() && message.isResponseRequired(), null, new Runnable() {
+                @Override
+                public void run() {
+                    if (indexListener != null) {
+                        message.getMessageId().setEntryLocator(concurrentStoreAndDispatchQueues /* any marker will suffice to indicate message is in the store */);
+                        indexListener.onAdd(new IndexListener.MessageContext(context, message, null));
+                    }
+                }
+            });
         }
 
         @Override

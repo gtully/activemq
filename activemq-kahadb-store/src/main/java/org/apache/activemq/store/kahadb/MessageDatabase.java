@@ -517,12 +517,12 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
             }
             KahaDestination destination;
             boolean isAdd = false;
-            if (operation instanceof AddOpperation) {
-                AddOpperation add = (AddOpperation) operation;
+            if (operation instanceof AddOperation) {
+                AddOperation add = (AddOperation) operation;
                 destination = add.getCommand().getDestination();
                 isAdd = true;
             } else {
-                RemoveOpperation removeOpperation = (RemoveOpperation) operation;
+                RemoveOperation removeOpperation = (RemoveOperation) operation;
                 destination = removeOpperation.getCommand().getDestination();
             }
             opCount opCount = destinationOpCount.get(destination);
@@ -1071,7 +1071,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         data.visit(new Visitor() {
             @Override
             public void visit(KahaAddMessageCommand command) throws IOException {
-                process(command, location);
+                process(command, location, before);
             }
 
             @Override
@@ -1127,10 +1127,10 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     }
 
     @SuppressWarnings("rawtypes")
-    protected void process(final KahaAddMessageCommand command, final Location location) throws IOException {
+    protected void process(final KahaAddMessageCommand command, final Location location, final Runnable runWithIndexLock) throws IOException {
         if (command.hasTransactionInfo()) {
             List<Operation> inflightTx = getInflightTx(command.getTransactionInfo(), location);
-            inflightTx.add(new AddOpperation(command, location));
+            inflightTx.add(new AddOperation(command, location, runWithIndexLock));
         } else {
             this.indexLock.writeLock().lock();
             try {
@@ -1140,6 +1140,9 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                         updateIndex(tx, command, location);
                     }
                 });
+                if (runWithIndexLock != null) {
+                    runWithIndexLock.run();
+                }
             } finally {
                 this.indexLock.writeLock().unlock();
             }
@@ -1165,7 +1168,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     protected void process(final KahaRemoveMessageCommand command, final Location location) throws IOException {
         if (command.hasTransactionInfo()) {
            List<Operation> inflightTx = getInflightTx(command.getTransactionInfo(), location);
-           inflightTx.add(new RemoveOpperation(command, location));
+           inflightTx.add(new RemoveOperation(command, location));
         } else {
             this.indexLock.writeLock().lock();
             try {
@@ -2399,22 +2402,26 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         abstract public void execute(Transaction tx) throws IOException;
     }
 
-    class AddOpperation extends Operation<KahaAddMessageCommand> {
-
-        public AddOpperation(KahaAddMessageCommand command, Location location) {
+    class AddOperation extends Operation<KahaAddMessageCommand> {
+        final Runnable runWithIndexLock;
+        public AddOperation(KahaAddMessageCommand command, Location location, Runnable runWithIndexLock) {
             super(command, location);
+            this.runWithIndexLock = runWithIndexLock;
         }
 
         @Override
         public void execute(Transaction tx) throws IOException {
             updateIndex(tx, command, location);
+            if (runWithIndexLock != null) {
+                runWithIndexLock.run();
+            }
         }
 
     }
 
-    class RemoveOpperation extends Operation<KahaRemoveMessageCommand> {
+    class RemoveOperation extends Operation<KahaRemoveMessageCommand> {
 
-        public RemoveOpperation(KahaRemoveMessageCommand command, Location location) {
+        public RemoveOperation(KahaRemoveMessageCommand command, Location location) {
             super(command, location);
         }
 

@@ -32,6 +32,7 @@ import org.apache.activemq.command.Message;
 import org.apache.activemq.command.MessageAck;
 import org.apache.activemq.command.MessageId;
 import org.apache.activemq.store.AbstractMessageStore;
+import org.apache.activemq.store.IndexListener;
 import org.apache.activemq.store.MessageRecoveryListener;
 import org.apache.activemq.util.ByteSequence;
 import org.apache.activemq.util.ByteSequenceData;
@@ -101,7 +102,7 @@ public class JDBCMessageStore extends AbstractMessageStore {
         }
     }
 
-    public void addMessage(ConnectionContext context, Message message) throws IOException {
+    public void addMessage(final ConnectionContext context, final Message message) throws IOException {
         MessageId messageId = message.getMessageId();
         if (audit != null && audit.isDuplicate(message)) {
             if (LOG.isDebugEnabled()) {
@@ -126,8 +127,25 @@ public class JDBCMessageStore extends AbstractMessageStore {
         long sequenceId;
         synchronized (pendingAdditions) {
             sequenceId = persistenceAdapter.getNextSequenceId();
-            if (message.isInTransaction()) {
-                trackPendingSequence(c, sequenceId);
+            final long sequence = sequenceId;
+            pendingAdditions.add(sequence);
+            c.onCompletion(new Runnable() {
+                public void run() {
+                    // message added to db
+                    message.getMessageId().setEntryLocator(sequence);
+                }
+            });
+
+            if (indexListener != null) {
+                indexListener.onAdd(new IndexListener.MessageContext(context, message, new Runnable() {
+                    @Override
+                    public void run() {
+                        // cursor add complete
+                        synchronized (pendingAdditions) { pendingAdditions.remove(sequence); }
+                    }
+                }));
+            } else {
+                pendingAdditions.remove(sequence);
             }
         }
         try {
@@ -139,7 +157,6 @@ public class JDBCMessageStore extends AbstractMessageStore {
         } finally {
             c.close();
         }
-        message.getMessageId().setEntryLocator(sequenceId);
         onAdd(message, sequenceId, message.getPriority());
     }
 
@@ -241,6 +258,8 @@ public class JDBCMessageStore extends AbstractMessageStore {
                 (Long) ack.getLastMessageId().getEntryLocator() :
                 persistenceAdapter.getStoreSequenceIdForMessageId(ack.getLastMessageId(), destination)[0];
 
+        //System.err.println(destination.getPhysicalName()  + " - " + ack.getLastMessageId() + ", seq: " + seq + " ack");
+
         // Get a connection and remove the message from the DB
         TransactionContext c = persistenceAdapter.getTransactionContext(context);
         try {
@@ -251,9 +270,9 @@ public class JDBCMessageStore extends AbstractMessageStore {
         } finally {
             c.close();
         }
-        if (context != null && context.getXid() != null) {
-            ack.getLastMessageId().setEntryLocator(seq);
-        }
+        //if (context != null && context.getXid() != null) {
+        //    ack.getLastMessageId().setEntryLocator(seq);
+        //}
     }
 
     public void recover(final MessageRecoveryListener listener) throws Exception {
