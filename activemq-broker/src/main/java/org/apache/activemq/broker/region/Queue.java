@@ -754,44 +754,50 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
         }
     }
 
-    private void orderedCursorUpdate() throws Exception {
+    private void doPendingCursorAdditions() throws Exception {
         LinkedList<MessageContext> orderedUpdates = new LinkedList<>();
         sendLock.lockInterruptibly();
         try {
             synchronized (indexOrderedCursorUpdates) {
                 MessageContext candidate = indexOrderedCursorUpdates.peek();
-                while (candidate != null && candidate.message.getMessageId().getEntryLocator() != null) {
-                    orderedUpdates.add(indexOrderedCursorUpdates.removeFirst());
+                while (candidate != null && candidate.message.getMessageId().getFutureOrSequenceLong() != null) {
+                    candidate = indexOrderedCursorUpdates.removeFirst();
+                    // check for duplicate adds suppressed by the store
+                    if (candidate.message.getMessageId().getFutureOrSequenceLong() instanceof Long && ((Long)candidate.message.getMessageId().getFutureOrSequenceLong()).compareTo(-1l) == 0) {
+                        LOG.warn("{} messageStore indicated duplicate add attempt for {}, suppressing duplicate dispatch", this, candidate.message.getMessageId());
+                    } else {
+                        orderedUpdates.add(candidate);
+                    }
                     candidate = indexOrderedCursorUpdates.peek();
                 }
             }
             for (MessageContext messageContext : orderedUpdates) {
                 cursorAdd(messageContext.message);
-                if (messageContext.onCompletion != null) {
-                    messageContext.onCompletion.run();
-                }
             }
         } finally {
             sendLock.unlock();
         }
         for (MessageContext messageContext : orderedUpdates) {
             messageSent(messageContext.context, messageContext.message);
+            if (messageContext.onCompletion != null) {
+                messageContext.onCompletion.run();
+            }
         }
         orderedUpdates.clear();
     }
 
-    final class SendSync extends Synchronization {
+    final class CursorAddSync extends Synchronization {
 
         private final MessageContext messageContext;
 
-        SendSync(MessageContext messageContext) {
+        CursorAddSync(MessageContext messageContext) {
             this.messageContext = messageContext;
         }
 
         @Override
         public void afterCommit() throws Exception {
             if (store != null && messageContext.message.isPersistent()) {
-                orderedCursorUpdate();
+                doPendingCursorAdditions();
             } else {
                 cursorAdd(messageContext.message);
                 messageSent(messageContext.context, messageContext.message);
@@ -852,11 +858,9 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
 
     private void orderedCursorAdd(Message message, ConnectionContext context) throws Exception {
         if (context.isInTransaction()) {
-            context.getTransaction().addSynchronization(new SendSync(new MessageContext(context, message, null)));
+            context.getTransaction().addSynchronization(new CursorAddSync(new MessageContext(context, message, null)));
         } else if (store != null && message.isPersistent()) {
-            // concurrent store and dispatch kahadb blows b/c the message won't yet be in the index
-            // and won't get dispatched
-            orderedCursorUpdate();
+            doPendingCursorAdditions();
         } else {
             // no ordering issue with non persistent messages
             cursorAdd(message);

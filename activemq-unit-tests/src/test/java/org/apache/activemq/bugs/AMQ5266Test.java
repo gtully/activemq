@@ -42,6 +42,7 @@ import org.apache.activemq.broker.region.policy.PolicyMap;
 import org.apache.activemq.command.ActiveMQQueue;
 import org.apache.activemq.store.jdbc.JDBCPersistenceAdapter;
 import org.apache.activemq.store.jdbc.adapter.DefaultJDBCAdapter;
+import org.apache.activemq.store.kahadb.KahaDBPersistenceAdapter;
 import org.apache.derby.jdbc.EmbeddedDataSource;
 import org.junit.After;
 import org.junit.Before;
@@ -89,14 +90,19 @@ public class AMQ5266Test {
     @Parameterized.Parameters(name="#{0},producerThreads:{1},consumerThreads:{2},mL:{3},useCache:{4},useDefaultStore:{5}")
     public static Iterable<Object[]> parameters() {
         return Arrays.asList(new Object[][]{
-                {1000, 20, 5, 50*1024, true, false},
-                // TODO - fix kahadb
-                // {1000, 20, 5, 50*1024, true, true}, // failure with kahadb due to contention between fill batch and cursor add
+                // jdbc
+                {1000, 20,  5,   50*1024,   true,  false},
+                {100,  20,  5,   50*1024,   false, false},
+                {1000, 5,   20,  50*1024,   true,  false},
+                {1000, 20,  20,  1024*1024, true,  false},
+                {1000, 100, 100, 1024*1024, true,  false},
 
-                //{100, 20, 5, 50*1024, false},
-                //{1000, 5, 20, 50*1024, true},
-                //{1000, 20, 20, 1024*1024, true},
-                //{1000, 100, 100, 1024*1024, true}
+                // default store
+                {1000, 20,  5,   50*1024,   true,  true},
+                {100,  20,  5,   50*1024,   false, true},
+                {1000, 5,   20,  50*1024,   true,  true},
+                {1000, 20,  20,  1024*1024, true,  true},
+                {1000, 100, 100, 1024*1024, true,  true}
         });
     }
 
@@ -116,6 +122,9 @@ public class AMQ5266Test {
 
         if (!useDefaultStore) {
             brokerService.setPersistenceAdapter(jdbcPersistenceAdapter);
+        } else {
+            KahaDBPersistenceAdapter kahaDBPersistenceAdapter = (KahaDBPersistenceAdapter) brokerService.getPersistenceAdapter();
+            kahaDBPersistenceAdapter.setConcurrentStoreAndDispatchQueues(true);
         }
         brokerService.setDeleteAllMessagesOnStartup(true);
 
@@ -197,7 +206,9 @@ public class AMQ5266Test {
             try {
                 int secs = (int) (endWait - System.currentTimeMillis()) / 1000;
                 LOG.info("Waiting For Consumer Completion. Time left: " + secs + " secs");
-                DefaultJDBCAdapter.dumpTables(dataSource.getConnection());
+                if (!useDefaultStore) {
+                    DefaultJDBCAdapter.dumpTables(dataSource.getConnection());
+                }
                 Thread.sleep(10000);
             } catch (Exception e) {
             }
@@ -209,7 +220,9 @@ public class AMQ5266Test {
 
         TimeUnit.SECONDS.sleep(2);
         LOG.info("DB Contents START");
-        DefaultJDBCAdapter.dumpTables(dataSource.getConnection());
+        if (!useDefaultStore) {
+            DefaultJDBCAdapter.dumpTables(dataSource.getConnection());
+        }
         LOG.info("DB Contents END");
 
         LOG.info("Consumer Stats:");

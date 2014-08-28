@@ -16,15 +16,16 @@
  */
 package org.apache.activemq.broker.region.cursors;
 
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.Future;
 import org.apache.activemq.broker.region.Destination;
 import org.apache.activemq.broker.region.MessageReference;
 import org.apache.activemq.broker.region.Subscription;
 import org.apache.activemq.command.Message;
 import org.apache.activemq.command.MessageId;
-import org.apache.activemq.command.TransactionId;
 import org.apache.activemq.store.MessageRecoveryListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,8 +42,8 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     protected boolean batchResetNeeded = false;
     private boolean storeHasMessages = false;
     protected int size;
-    private volatile MessageId lastCachedId;
-    private TransactionId lastTx;
+    private LinkedList<MessageId> pendingCachedIds = new LinkedList<>();
+    MessageId lastCachedId = null;
     protected boolean hadSpace = false;
 
     protected AbstractStoreCursor(Destination destination) {
@@ -86,12 +87,9 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         return recoverMessage(message,false);
     }
 
-    final HashMap<MessageId, Throwable> insertions = new HashMap();
     public synchronized boolean recoverMessage(Message message, boolean cached) throws Exception {
         boolean recovered = false;
         if (recordUniqueId(message.getMessageId())) {
-            // usefull to debug dup cause
-            // insertions.put(message.getMessageId(), new Throwable("insertion @"));
             if (!cached) {
                 message.setRegionDestination(regionDestination);
                 if( message.getMemoryUsage()==null ) {
@@ -104,13 +102,9 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
             recovered = true;
             storeHasMessages = true;
         } else {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug(this + " - cursor got duplicate: " + message.getMessageId() + "," + message.getPriority() + ", cached=" + cached, new Throwable("duplicate message detected"));
-            } else {
-                LOG.warn("{} - cursor got duplicate {} seq: {}, lastCached: " + lastCachedId, regionDestination.getActiveMQDestination(), message.getMessageId(), message.getMessageId().getEntryLocator(), new Throwable("got dup @").initCause(insertions.get(message.getMessageId())));
-            }
-            if (!cached ||  message.getMessageId().getEntryLocator() != null) {
-                // came from the store or was added to the jdbc store
+            LOG.warn("{} - cursor got duplicate {} seq: {}", this, message.getMessageId(), message.getMessageId().getFutureOrSequenceLong());
+            if (!cached) {
+                // came from the store via doPageIn
                 duplicate(message);
             }
         }
@@ -193,18 +187,27 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         return result;
     }
     
-    
+    final static Comparator<MessageId> entryLocatorComparator = new Comparator<MessageId>() {
+        @Override
+        public int compare(MessageId o1, MessageId o2) {
+            return Long.compare(((Long) o1.getFutureOrSequenceLong()), ((Long) o2.getFutureOrSequenceLong()));
+        }
+    };
     public final synchronized void addMessageLast(MessageReference node) throws Exception {
         boolean disableCache = false;
         if (hasSpace()) {
             if (!isCacheEnabled() && size==0 && isStarted() && useCache) {
-                LOG.trace("{} - enabling cache for empty store {}", this, node.getMessageId());
+                LOG.trace("{} - enabling cache for empty store {} {}", this, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong());
                 setCacheEnabled(true);
             }
             if (isCacheEnabled()) {
                 if (recoverMessage(node.getMessage(),true)) {
-                    lastCachedId = node.getMessageId();
-                    lastTx = node.getMessage().getTransactionId();
+                    if (node.getMessageId().getFutureOrSequenceLong() instanceof Future) {
+                        pruneLastCached();
+                        pendingCachedIds.add(node.getMessageId());
+                    } else {
+                        setLastCachedId(node.getMessageId());
+                    }
                 } else {
                     dealWithDuplicates();
                     return;
@@ -217,16 +220,60 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         if (disableCache && isCacheEnabled()) {
             setCacheEnabled(false);
             // sync with store on disabling the cache
-            if (lastCachedId != null) {
-                LOG.debug("{} - disabling cache, lastCachedId: {} last-tx: {} current node Id: {} node-tx: {} batchList size: {}",
-                        new Object[]{ this, lastCachedId, lastTx, node.getMessageId(), node.getMessage().getTransactionId(), batchList.size() });
-                setBatch(lastCachedId);
-                lastCachedId = null;
-                lastTx = null;
+            if (!pendingCachedIds.isEmpty() || lastCachedId != null) {
+                LOG.trace("{} - disabling cache, lastCachedIds: {} lastCachedId: {}, current Id: {} seq: {}, batchList size: {}",
+                            new Object[]{this, pendingCachedIds.size(), lastCachedId, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong(), batchList.size()});
+                collapseLastCachedIds();
+                if (lastCachedId != null) {
+                    setBatch(lastCachedId);
+                    lastCachedId = null;
+                }
             }
         }
         this.storeHasMessages = true;
         size++;
+    }
+
+
+    private void pruneLastCached() {
+        for (Iterator<MessageId> it = pendingCachedIds.iterator(); it.hasNext(); ) {
+            MessageId candidate = it.next();
+            if (candidate.getFutureOrSequenceLong() instanceof Future) {
+                Future future = (Future) candidate.getFutureOrSequenceLong();
+                if (future.isCancelled()) {
+                    it.remove();
+                }
+            } else {
+                // store complete - track via lastCachedId
+                setLastCachedId(candidate);
+                it.remove();
+            }
+        }
+    }
+
+    private void collapseLastCachedIds() throws Exception {
+        for (MessageId candidate : pendingCachedIds) {
+            Object entryLocator = candidate.getFutureOrSequenceLong();
+            if (entryLocator instanceof Future) {
+                Future future = (Future) entryLocator;
+                try {
+                    future.get();
+                    // future should be replaced with sequence by this time
+                } catch (CancellationException ignored) {
+                    continue;
+                }
+            }
+            setLastCachedId(candidate);
+        }
+        pendingCachedIds.clear();
+    }
+
+    private void setLastCachedId(MessageId candidate) {
+        if (lastCachedId == null) {
+            lastCachedId = candidate;
+        } else if (entryLocatorComparator.compare(candidate, lastCachedId) > 0) {
+            lastCachedId = candidate;
+        }
     }
 
     protected void setBatch(MessageId messageId) throws Exception {
@@ -264,8 +311,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     
     
     public synchronized void gc() {
-        for (Iterator<MessageReference>i = batchList.iterator();i.hasNext();) {
-            MessageReference msg = i.next();
+        for (MessageReference msg : batchList) {
             rollback(msg.getMessageId());
             msg.decrementReferenceCount();
         }
@@ -276,7 +322,6 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     }
 
     protected final synchronized void fillBatch() {
-        //LOG.trace("{} - fillBatch", this);
         if (batchResetNeeded) {
             resetSize();
             setMaxBatchSize(Math.min(regionDestination.getMaxPageSize(), size));
@@ -317,7 +362,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     public String toString() {
         return super.toString() + ":" + regionDestination.getActiveMQDestination().getPhysicalName() + ",batchResetNeeded=" + batchResetNeeded
                     + ",storeHasMessages=" + this.storeHasMessages + ",size=" + this.size + ",cacheEnabled=" + isCacheEnabled()
-                    + ",maxBatchSize:" + maxBatchSize + ",hasSpace:" + hasSpace();
+                    + ",maxBatchSize:" + maxBatchSize + ",hasSpace:" + hasSpace() + ",pendingCachedIds.size:" + pendingCachedIds.size() + ", lastCachedId:" + lastCachedId;
     }
     
     protected abstract void doFillBatch() throws Exception;

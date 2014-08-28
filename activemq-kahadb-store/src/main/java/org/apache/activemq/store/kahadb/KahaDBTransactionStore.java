@@ -252,7 +252,7 @@ public class KahaDBTransactionStore implements TransactionStore {
         return tx;
     }
 
-    public void commit(TransactionId txid, boolean wasPrepared, Runnable preCommit, Runnable postCommit)
+    public void commit(TransactionId txid, boolean wasPrepared, final Runnable preCommit, Runnable postCommit)
             throws IOException {
         if (txid != null) {
             if (!txid.isXATransaction() && theStore.isConcurrentStoreAndDispatchTransactions()) {
@@ -292,7 +292,10 @@ public class KahaDBTransactionStore implements TransactionStore {
 
             } else {
                 KahaTransactionInfo info = getTransactionInfo(txid);
-                theStore.store(new KahaCommitCommand().setTransactionInfo(info), theStore.isEnableJournalDiskSyncs(), preCommit, postCommit);
+                if (preCommit != null) {
+                    preCommit.run();
+                }
+                theStore.store(new KahaCommitCommand().setTransactionInfo(info), theStore.isEnableJournalDiskSyncs(), null, postCommit);
                 forgetRecoveredAcks(txid, false);
             }
         }else {

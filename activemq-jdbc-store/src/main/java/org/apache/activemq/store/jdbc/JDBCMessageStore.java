@@ -132,7 +132,7 @@ public class JDBCMessageStore extends AbstractMessageStore {
             c.onCompletion(new Runnable() {
                 public void run() {
                     // message added to db
-                    message.getMessageId().setEntryLocator(sequence);
+                    message.getMessageId().setFutureOrSequenceLong(sequence);
                 }
             });
 
@@ -161,15 +161,6 @@ public class JDBCMessageStore extends AbstractMessageStore {
     }
 
     // jdbc commit order is random with concurrent connections - limit scan to lowest pending
-    private void trackPendingSequence(final TransactionContext transactionContext, final long sequenceId) {
-        synchronized (pendingAdditions) { pendingAdditions.add(sequenceId); }
-        transactionContext.onCompletion(new Runnable() {
-            public void run() {
-                synchronized (pendingAdditions) { pendingAdditions.remove(sequenceId); }
-            }
-        });
-    }
-
     private long minPendingSequeunceId() {
         synchronized (pendingAdditions) {
             if (!pendingAdditions.isEmpty()) {
@@ -254,11 +245,9 @@ public class JDBCMessageStore extends AbstractMessageStore {
 
     public void removeMessage(ConnectionContext context, MessageAck ack) throws IOException {
 
-    	long seq = ack.getLastMessageId().getEntryLocator() != null ?
-                (Long) ack.getLastMessageId().getEntryLocator() :
+    	long seq = ack.getLastMessageId().getFutureOrSequenceLong() != null ?
+                (Long) ack.getLastMessageId().getFutureOrSequenceLong() :
                 persistenceAdapter.getStoreSequenceIdForMessageId(ack.getLastMessageId(), destination)[0];
-
-        //System.err.println(destination.getPhysicalName()  + " - " + ack.getLastMessageId() + ", seq: " + seq + " ack");
 
         // Get a connection and remove the message from the DB
         TransactionContext c = persistenceAdapter.getTransactionContext(context);
@@ -360,7 +349,7 @@ public class JDBCMessageStore extends AbstractMessageStore {
                 public boolean recoverMessage(long sequenceId, byte[] data) throws Exception {
                         Message msg = (Message)wireFormat.unmarshal(new ByteSequence(data));
                         msg.getMessageId().setBrokerSequenceId(sequenceId);
-                        msg.getMessageId().setEntryLocator(sequenceId);
+                        msg.getMessageId().setFutureOrSequenceLong(sequenceId);
                         listener.recoverMessage(msg);
                         lastRecoveredSequenceId.set(sequenceId);
                         lastRecoveredPriority.set(msg.getPriority());

@@ -29,6 +29,8 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -84,7 +86,7 @@ import org.apache.activemq.wireformat.WireFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
+public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, MessageDatabase.SerialExecution<Location> {
     static final Logger LOG = LoggerFactory.getLogger(KahaDBStore.class);
     private static final int MAX_ASYNC_JOBS = 10000;
 
@@ -105,7 +107,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
     private LinkedBlockingQueue<Runnable> asyncTopicJobQueue;
     Semaphore globalQueueSemaphore;
     Semaphore globalTopicSemaphore;
-    private boolean concurrentStoreAndDispatchQueues = false;
+    private boolean concurrentStoreAndDispatchQueues = true;
     // when true, message order may be compromised when cache is exhausted if store is out
     // or order w.r.t cache
     private boolean concurrentStoreAndDispatchTopics = false;
@@ -122,6 +124,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
                 return txid;
             }
         };
+        serialExecutor = this;
     }
 
     @Override
@@ -208,7 +211,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
             // In case the recovered store used a different OpenWire version log a warning
             // to assist in determining why journal reads fail.
             if (metadata.openwireVersion != brokerService.getStoreOpenWireVersion()) {
-                LOG.warn("Receovered Store uses a different OpenWire version[{}] " +
+                LOG.warn("Recovered Store uses a different OpenWire version[{}] " +
                          "than the version configured[{}].",
                          metadata.openwireVersion, brokerService.getStoreOpenWireVersion());
             }
@@ -359,6 +362,17 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
         this.forceRecoverIndex = forceRecoverIndex;
     }
 
+    @Override
+    public Location execute(Callable<Location> c) throws Exception {
+        if (isConcurrentStoreAndDispatchQueues()) {
+            FutureTask<Location> future = new FutureTask<>(c);
+            this.queueExecutor.execute(future);
+            return future.get();
+        } else {
+            return c.call();
+        }
+    }
+
     public class KahaDBMessageStore extends AbstractMessageStore {
         protected final Map<AsyncJobKey, StoreTask> asyncTaskMap = new HashMap<AsyncJobKey, StoreTask>();
         protected KahaDestination dest;
@@ -386,7 +400,25 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
                 StoreQueueTask result = new StoreQueueTask(this, context, message);
                 result.aquireLocks();
                 addQueueTask(this, result);
-                return result.getFuture();
+                final ListenableFuture<Object> future = result.getFuture();
+                if (indexListener != null) {
+                    // allow concurrent dispatch by setting entry locator,
+                    // wait for add completion to remove potential pending addition
+                    message.getMessageId().setFutureOrSequenceLong(future);
+                    indexListener.onAdd(new IndexListener.MessageContext(context, message, new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                future.get();
+                                trackPendingAddComplete(dest, (Long) message.getMessageId().getFutureOrSequenceLong());
+                            } catch (CancellationException okNothingToTrack) {
+                            } catch (Exception e) {
+                                LOG.warn("{} unexpected exception tracking completion of async add of {}", this, message.getMessageId(), e);
+                            }
+                        }
+                    }));
+                }
+                return future;
             } else {
                 return super.asyncAddQueueMessage(context, message);
             }
@@ -433,15 +465,25 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
             command.setPrioritySupported(isPrioritizedMessages());
             org.apache.activemq.util.ByteSequence packet = wireFormat.marshal(message);
             command.setMessage(new Buffer(packet.getData(), packet.getOffset(), packet.getLength()));
-            store(command, isEnableJournalDiskSyncs() && message.isResponseRequired(), null, new Runnable() {
+            store(command, isEnableJournalDiskSyncs() && message.isResponseRequired(), new IndexAware() {
                 @Override
-                public void run() {
+                public void sequenceAssignedWithIndexLocked(final long sequence) {
                     if (indexListener != null) {
-                        message.getMessageId().setEntryLocator(concurrentStoreAndDispatchQueues /* any marker will suffice to indicate message is in the store */);
-                        indexListener.onAdd(new IndexListener.MessageContext(context, message, null));
+                        trackPendingAdd(dest, sequence);
+                        Object possibleFuture = message.getMessageId().getFutureOrSequenceLong();
+                        message.getMessageId().setFutureOrSequenceLong(sequence);
+                        if (possibleFuture == null) {
+                            // sync add (for async future present from getFutureOrSequenceLong)
+                            indexListener.onAdd(new IndexListener.MessageContext(context, message, new Runnable() {
+                                @Override
+                                public void run() {
+                                    trackPendingAddComplete(dest, sequence);
+                                }
+                            }));
+                        }
                     }
                 }
-            });
+            }, null);
         }
 
         @Override
@@ -590,6 +632,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
                                 continue;
                             }
                             Message msg = loadMessage(entry.getValue().location);
+                            msg.getMessageId().setFutureOrSequenceLong(entry.getKey());
                             listener.recoverMessage(msg);
                             counter++;
                             if (counter >= maxReturned) {
@@ -651,7 +694,7 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
         }
 
         @Override
-        public void setBatch(MessageId identity) throws IOException {
+        public void setBatch(final MessageId identity) throws IOException {
             try {
                 final String key = identity.toProducerKey();
                 lockAsyncJobQueue();
@@ -668,6 +711,8 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter {
                             Long location = sd.messageIdIndex.get(tx, key);
                             if (location != null) {
                                 sd.orderIndex.setBatch(tx, location);
+                            } else {
+                                LOG.warn("{} Location {} not found in order index for {}", this, identity.getFutureOrSequenceLong(), identity);
                             }
                         }
                     });

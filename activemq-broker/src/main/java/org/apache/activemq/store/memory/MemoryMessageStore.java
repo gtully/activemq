@@ -42,6 +42,7 @@ public class MemoryMessageStore extends AbstractMessageStore {
 
     protected final Map<MessageId, Message> messageTable;
     protected MessageId lastBatchId;
+    protected long sequenceId;
 
     public MemoryMessageStore(ActiveMQDestination destination) {
         this(destination, new LinkedHashMap<MessageId, Message>());
@@ -57,7 +58,7 @@ public class MemoryMessageStore extends AbstractMessageStore {
             messageTable.put(message.getMessageId(), message);
         }
         message.incrementReferenceCount();
-        message.getMessageId().setEntryLocator(Boolean.TRUE);
+        message.getMessageId().setFutureOrSequenceLong(sequenceId++);
         if (indexListener != null) {
             indexListener.onAdd(new IndexListener.MessageContext(context, message, null));
         }
