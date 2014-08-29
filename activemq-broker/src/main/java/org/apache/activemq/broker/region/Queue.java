@@ -772,13 +772,18 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
                 }
             }
             for (MessageContext messageContext : orderedUpdates) {
-                cursorAdd(messageContext.message);
+                if (!cursorAdd(messageContext.message)) {
+                    // cursor suppressed a duplicate
+                    messageContext.duplicate = true;
+                }
             }
         } finally {
             sendLock.unlock();
         }
         for (MessageContext messageContext : orderedUpdates) {
-            messageSent(messageContext.context, messageContext.message);
+            if (!messageContext.duplicate) {
+                messageSent(messageContext.context, messageContext.message);
+            }
             if (messageContext.onCompletion != null) {
                 messageContext.onCompletion.run();
             }
@@ -1773,10 +1778,10 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
         }
     }
 
-    final void cursorAdd(final Message msg) throws Exception {
+    final boolean cursorAdd(final Message msg) throws Exception {
         messagesLock.writeLock().lock();
         try {
-            messages.addMessageLast(msg);
+            return messages.addMessageLast(msg);
         } finally {
             messagesLock.writeLock().unlock();
         }

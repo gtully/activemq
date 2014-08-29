@@ -290,21 +290,6 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, 
         super.doStop(stopper);
     }
 
-    @Override
-    void rollbackStatsOnDuplicate(KahaDestination commandDestination) {
-        if (brokerService != null) {
-            RegionBroker regionBroker = (RegionBroker) brokerService.getRegionBroker();
-            if (regionBroker != null) {
-                ActiveMQDestination activeMQDestination = convert(commandDestination);
-                Destination destination = regionBroker.getDestinationMap(activeMQDestination).get(activeMQDestination);
-                if (destination != null) {
-                    destination.getDestinationStatistics().getMessages().decrement();
-                    destination.getDestinationStatistics().getEnqueues().decrement();
-                }
-            }
-        }
-    }
-
     private Location findMessageLocation(final String key, final KahaDestination destination) throws IOException {
         return pageFile.tx().execute(new Transaction.CallableClosure<Location, IOException>() {
             @Override
@@ -468,10 +453,10 @@ public class KahaDBStore extends MessageDatabase implements PersistenceAdapter, 
             store(command, isEnableJournalDiskSyncs() && message.isResponseRequired(), new IndexAware() {
                 @Override
                 public void sequenceAssignedWithIndexLocked(final long sequence) {
+                    final Object possibleFuture = message.getMessageId().getFutureOrSequenceLong();
+                    message.getMessageId().setFutureOrSequenceLong(sequence);
                     if (indexListener != null) {
                         trackPendingAdd(dest, sequence);
-                        Object possibleFuture = message.getMessageId().getFutureOrSequenceLong();
-                        message.getMessageId().setFutureOrSequenceLong(sequence);
                         if (possibleFuture == null) {
                             // sync add (for async future present from getFutureOrSequenceLong)
                             indexListener.onAdd(new IndexListener.MessageContext(context, message, new Runnable() {

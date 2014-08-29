@@ -133,6 +133,7 @@ public class JDBCMessageStore extends AbstractMessageStore {
                 public void run() {
                     // message added to db
                     message.getMessageId().setFutureOrSequenceLong(sequence);
+                    message.getMessageId().setEntryLocator(sequence);
                 }
             });
 

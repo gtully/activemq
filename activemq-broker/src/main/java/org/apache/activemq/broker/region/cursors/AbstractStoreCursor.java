@@ -16,7 +16,6 @@
  */
 package org.apache.activemq.broker.region.cursors;
 
-import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.concurrent.CancellationException;
@@ -103,8 +102,11 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
             storeHasMessages = true;
         } else {
             LOG.warn("{} - cursor got duplicate {} seq: {}", this, message.getMessageId(), message.getMessageId().getFutureOrSequenceLong());
-            if (!cached) {
-                // came from the store via doPageIn
+
+            // a duplicate from the store - needs to be removed/acked - otherwise it will get redispatched on restart
+            // jdbc store will store duplicates and will set entry locator to sequence long.
+            // REVISIT - this seems too hacky - see use case AMQ4952Test
+            if (!cached || message.getMessageId().getEntryLocator() instanceof Long) {
                 duplicate(message);
             }
         }
@@ -187,13 +189,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         return result;
     }
     
-    final static Comparator<MessageId> entryLocatorComparator = new Comparator<MessageId>() {
-        @Override
-        public int compare(MessageId o1, MessageId o2) {
-            return Long.compare(((Long) o1.getFutureOrSequenceLong()), ((Long) o2.getFutureOrSequenceLong()));
-        }
-    };
-    public final synchronized void addMessageLast(MessageReference node) throws Exception {
+    public final synchronized boolean addMessageLast(MessageReference node) throws Exception {
         boolean disableCache = false;
         if (hasSpace()) {
             if (!isCacheEnabled() && size==0 && isStarted() && useCache) {
@@ -210,7 +206,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
                     }
                 } else {
                     dealWithDuplicates();
-                    return;
+                    return false;
                 }
             }
         } else {
@@ -221,8 +217,8 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
             setCacheEnabled(false);
             // sync with store on disabling the cache
             if (!pendingCachedIds.isEmpty() || lastCachedId != null) {
-                LOG.trace("{} - disabling cache, lastCachedIds: {} lastCachedId: {}, current Id: {} seq: {}, batchList size: {}",
-                            new Object[]{this, pendingCachedIds.size(), lastCachedId, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong(), batchList.size()});
+                LOG.trace("{} - disabling cache. current Id: {} seq: {}, batchList size: {}",
+                            new Object[]{this, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong(), batchList.size()});
                 collapseLastCachedIds();
                 if (lastCachedId != null) {
                     setBatch(lastCachedId);
@@ -232,14 +228,16 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
         }
         this.storeHasMessages = true;
         size++;
+        return true;
     }
 
 
     private void pruneLastCached() {
         for (Iterator<MessageId> it = pendingCachedIds.iterator(); it.hasNext(); ) {
             MessageId candidate = it.next();
-            if (candidate.getFutureOrSequenceLong() instanceof Future) {
-                Future future = (Future) candidate.getFutureOrSequenceLong();
+            final Object futureOrLong = candidate.getFutureOrSequenceLong();
+            if (futureOrLong instanceof Future) {
+                Future future = (Future) futureOrLong;
                 if (future.isCancelled()) {
                     it.remove();
                 }
@@ -253,9 +251,9 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
 
     private void collapseLastCachedIds() throws Exception {
         for (MessageId candidate : pendingCachedIds) {
-            Object entryLocator = candidate.getFutureOrSequenceLong();
-            if (entryLocator instanceof Future) {
-                Future future = (Future) entryLocator;
+            final Object futureOrLong = candidate.getFutureOrSequenceLong();
+            if (futureOrLong instanceof Future) {
+                Future future = (Future) futureOrLong;
                 try {
                     future.get();
                     // future should be replaced with sequence by this time
@@ -271,7 +269,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     private void setLastCachedId(MessageId candidate) {
         if (lastCachedId == null) {
             lastCachedId = candidate;
-        } else if (entryLocatorComparator.compare(candidate, lastCachedId) > 0) {
+        } else if (Long.compare(((Long) candidate.getFutureOrSequenceLong()), ((Long) lastCachedId.getFutureOrSequenceLong())) > 0) {
             lastCachedId = candidate;
         }
     }
@@ -362,7 +360,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     public String toString() {
         return super.toString() + ":" + regionDestination.getActiveMQDestination().getPhysicalName() + ",batchResetNeeded=" + batchResetNeeded
                     + ",storeHasMessages=" + this.storeHasMessages + ",size=" + this.size + ",cacheEnabled=" + isCacheEnabled()
-                    + ",maxBatchSize:" + maxBatchSize + ",hasSpace:" + hasSpace() + ",pendingCachedIds.size:" + pendingCachedIds.size() + ", lastCachedId:" + lastCachedId;
+                    + ",maxBatchSize:" + maxBatchSize + ",hasSpace:" + hasSpace() + ",pendingCachedIds.size:" + pendingCachedIds.size() + ",lastCachedId:" + lastCachedId;
     }
     
     protected abstract void doFillBatch() throws Exception;

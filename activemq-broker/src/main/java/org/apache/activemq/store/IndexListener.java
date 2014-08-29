@@ -28,6 +28,7 @@ public interface IndexListener {
         public Message message;
         public ConnectionContext context;
         public Runnable onCompletion;
+        public boolean duplicate;
 
         public MessageContext(ConnectionContext context, Message message, Runnable onCompletion) {
             this.context = context;
