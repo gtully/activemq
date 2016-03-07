@@ -29,6 +29,8 @@ import javax.jms.TextMessage;
 import org.apache.activemq.ActiveMQConnection;
 import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.EmbeddedBrokerTestSupport;
+import org.apache.activemq.broker.region.policy.PolicyEntry;
+import org.apache.activemq.broker.region.policy.PolicyMap;
 import org.apache.activemq.command.ActiveMQDestination;
 import org.apache.activemq.transport.RequestTimedOutIOException;
 import org.slf4j.Logger;
@@ -134,7 +136,12 @@ public class JmsTimeoutTest extends EmbeddedBrokerTestSupport {
         bindAddress = "tcp://localhost:0";
         broker = createBroker();
         broker.setDeleteAllMessagesOnStartup(true);
-        broker.getSystemUsage().getMemoryUsage().setLimit(5*1024*1024);
+        broker.getSystemUsage().getMemoryUsage().setLimit(5 * 1024 * 1024);
+        PolicyMap policyMap = new PolicyMap();
+        PolicyEntry defaultPolicy = new PolicyEntry();
+        defaultPolicy.setCursorMemoryHighWaterMark(110);
+        policyMap.setDefaultEntry(defaultPolicy);
+        broker.setDestinationPolicy(policyMap);
 
         super.setUp();
     }

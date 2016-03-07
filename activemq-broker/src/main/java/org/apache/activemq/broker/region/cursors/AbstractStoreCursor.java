@@ -210,7 +210,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     @Override
     public synchronized boolean tryAddMessageLast(MessageReference node, long wait) throws Exception {
         boolean disableCache = false;
-        if (hasSpace()) {
+        if (hasSpaceForMoreMessages()) {
             if (!isCacheEnabled() && size==0 && isStarted() && useCache) {
                 if (LOG.isTraceEnabled()) {
                     LOG.trace("{} - enabling cache for empty store {} {}", this, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong());
@@ -231,7 +231,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
 
         if (disableCache && isCacheEnabled()) {
             if (LOG.isTraceEnabled()) {
-                LOG.trace("{} - disabling cache on add {} {}", this, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong());
+                LOG.trace("{} - disabling cache on add {} {}, mem usage: {}", this, node.getMessageId(), node.getMessageId().getFutureOrSequenceLong(), systemUsage != null ? systemUsage.getMemoryUsage() : systemUsage);
             }
             syncWithStore(node.getMessage());
             setCacheEnabled(false);
@@ -389,6 +389,11 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     }
 
     @Override
+    public boolean hasSpace() {
+        return !isFull();
+    }
+
+    @Override
     protected final synchronized void fillBatch() {
         if (LOG.isTraceEnabled()) {
             LOG.trace("{} fillBatch", this);
@@ -399,7 +404,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
             resetBatch();
             this.batchResetNeeded = false;
         }
-        if (this.batchList.isEmpty() && this.size >0 && hasSpace()) {
+        if (this.batchList.isEmpty() && this.size >0 && hasSpaceForMoreMessages()) {
             try {
                 doFillBatch();
             } catch (Exception e) {
@@ -440,7 +445,7 @@ public abstract class AbstractStoreCursor extends AbstractPendingMessageCursor i
     public String toString() {
         return super.toString() + ":" + regionDestination.getActiveMQDestination().getPhysicalName() + ",batchResetNeeded=" + batchResetNeeded
                     + ",size=" + this.size + ",cacheEnabled=" + isCacheEnabled()
-                    + ",maxBatchSize:" + maxBatchSize + ",hasSpace:" + hasSpace() + ",pendingCachedIds.size:" + pendingCachedIds.size()
+                    + ",maxBatchSize:" + maxBatchSize + ",hasSpaceForMoreMessages:" + hasSpaceForMoreMessages() + ",pendingCachedIds.size:" + pendingCachedIds.size()
                     + ",lastSyncCachedId:" + lastCachedIds[SYNC_ADD] + ",lastSyncCachedId-seq:" + (lastCachedIds[SYNC_ADD] != null ? lastCachedIds[SYNC_ADD].getFutureOrSequenceLong() : "null")
                     + ",lastAsyncCachedId:" + lastCachedIds[ASYNC_ADD] + ",lastAsyncCachedId-seq:" + (lastCachedIds[ASYNC_ADD] != null ? lastCachedIds[ASYNC_ADD].getFutureOrSequenceLong() : "null");
     }

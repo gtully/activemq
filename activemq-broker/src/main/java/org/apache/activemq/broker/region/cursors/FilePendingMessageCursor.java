@@ -147,7 +147,7 @@ public class FilePendingMessageCursor extends AbstractPendingMessageCursor imple
         };
         if (flushRequired) {
             flushRequired = false;
-            if (!hasSpace()) {
+            if (!hasSpaceForMoreMessages()) {
                 flushToDisk();
             }
         }
@@ -208,17 +208,17 @@ public class FilePendingMessageCursor extends AbstractPendingMessageCursor imple
             try {
                 regionDestination = (Destination) node.getMessage().getRegionDestination();
                 if (isDiskListEmpty()) {
-                    if (hasSpace() || this.store == null) {
+                    if (hasSpaceForMoreMessages() || this.store == null) {
                         memoryList.addMessageLast(node);
                         node.incrementReferenceCount();
                         setCacheEnabled(true);
                         return true;
                     }
                 }
-                if (!hasSpace()) {
+                if (!hasSpaceForMoreMessages()) {
                     if (isDiskListEmpty()) {
                         expireOldMessages();
-                        if (hasSpace()) {
+                        if (hasSpaceForMoreMessages()) {
                             memoryList.addMessageLast(node);
                             node.incrementReferenceCount();
                             return true;
@@ -256,17 +256,17 @@ public class FilePendingMessageCursor extends AbstractPendingMessageCursor imple
             try {
                 regionDestination = (Destination) node.getMessage().getRegionDestination();
                 if (isDiskListEmpty()) {
-                    if (hasSpace()) {
+                    if (hasSpaceForMoreMessages()) {
                         memoryList.addMessageFirst(node);
                         node.incrementReferenceCount();
                         setCacheEnabled(true);
                         return;
                     }
                 }
-                if (!hasSpace()) {
+                if (!hasSpaceForMoreMessages()) {
                     if (isDiskListEmpty()) {
                         expireOldMessages();
-                        if (hasSpace()) {
+                        if (hasSpaceForMoreMessages()) {
                             memoryList.addMessageFirst(node);
                             node.incrementReferenceCount();
                             return;
@@ -397,7 +397,7 @@ public class FilePendingMessageCursor extends AbstractPendingMessageCursor imple
                     flushRequired =true;
                     if (!iterating) {
                         expireOldMessages();
-                        if (!hasSpace()) {
+                        if (!hasSpaceForMoreMessages()) {
                             flushToDisk();
                             flushRequired = false;
                         }

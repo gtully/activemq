@@ -291,21 +291,18 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
                 toExpire.add(message);
                 return true;
             }
-            if (hasSpace()) {
-                messagesLock.writeLock().lock();
+            messagesLock.writeLock().lock();
+            try {
                 try {
-                    try {
-                        messages.addMessageLast(message);
-                    } catch (Exception e) {
-                        LOG.error("Failed to add message to cursor", e);
-                    }
-                } finally {
-                    messagesLock.writeLock().unlock();
+                    messages.addMessageLast(message);
+                } catch (Exception e) {
+                    LOG.error("Failed to add message to cursor", e);
                 }
-                destinationStatistics.getMessages().increment();
-                return true;
+            } finally {
+                messagesLock.writeLock().unlock();
             }
-            return false;
+            destinationStatistics.getMessages().increment();
+            return true;
         }
 
         @Override
@@ -630,108 +627,113 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
             }
             return;
         }
-        if (memoryUsage.isFull()) {
-            isFull(context, memoryUsage);
-            fastProducer(context, producerInfo);
-            if (isProducerFlowControl() && context.isProducerFlowControl()) {
-                if (warnOnProducerFlowControl) {
-                    warnOnProducerFlowControl = false;
-                    LOG.info("Usage Manager Memory Limit ({}) reached (%{}) on {}, size {}. Producers will be throttled to the rate at which messages are removed from this destination to prevent flooding it. See http://activemq.apache.org/producer-flow-control.html for more info.",
-                                    memoryUsage.getLimit(), memoryUsage.getPercentUsage(), getActiveMQDestination().getQualifiedName(), destinationStatistics.getMessages().getCount());
-                }
-
-                if (!context.isNetworkConnection() && systemUsage.isSendFailIfNoSpace()) {
-                    throw new ResourceAllocationException("Usage Manager Memory Limit reached. Stopping producer ("
-                            + message.getProducerId() + ") to prevent flooding "
-                            + getActiveMQDestination().getQualifiedName() + "."
-                            + " See http://activemq.apache.org/producer-flow-control.html for more info");
-                }
-
-                // We can avoid blocking due to low usage if the producer is
-                // sending
-                // a sync message or if it is using a producer window
-                if (producerInfo.getWindowSize() > 0 || message.isResponseRequired()) {
-                    // copy the exchange state since the context will be
-                    // modified while we are waiting
-                    // for space.
-                    final ProducerBrokerExchange producerExchangeCopy = producerExchange.copy();
-                    synchronized (messagesWaitingForSpace) {
-                     // Start flow control timeout task
-                        // Prevent trying to start it multiple times
-                        if (!flowControlTimeoutTask.isAlive()) {
-                            flowControlTimeoutTask.setName(getName()+" Producer Flow Control Timeout Task");
-                            flowControlTimeoutTask.start();
-                        }
-                        messagesWaitingForSpace.put(message.getMessageId(), new Runnable() {
-                            @Override
-                            public void run() {
-
-                                try {
-                                    // While waiting for space to free up... the
-                                    // message may have expired.
-                                    if (message.isExpired()) {
-                                        LOG.error("expired waiting for space..");
-                                        broker.messageExpired(context, message, null);
-                                        destinationStatistics.getExpired().increment();
-                                    } else {
-                                        doMessageSend(producerExchangeCopy, message);
-                                    }
-
-                                    if (sendProducerAck) {
-                                        ProducerAck ack = new ProducerAck(producerInfo.getProducerId(), message
-                                                .getSize());
-                                        context.getConnection().dispatchAsync(ack);
-                                    } else {
-                                        Response response = new Response();
-                                        response.setCorrelationId(message.getCommandId());
-                                        context.getConnection().dispatchAsync(response);
-                                    }
-
-                                } catch (Exception e) {
-                                    if (!sendProducerAck && !context.isInRecoveryMode() && !brokerService.isStopping()) {
-                                        ExceptionResponse response = new ExceptionResponse(e);
-                                        response.setCorrelationId(message.getCommandId());
-                                        context.getConnection().dispatchAsync(response);
-                                    } else {
-                                        LOG.debug("unexpected exception on deferred send of: {}", message, e);
-                                    }
-                                }
-                            }
-                        });
-
-                        if (!context.isNetworkConnection() && systemUsage.getSendFailIfNoSpaceAfterTimeout() != 0) {
-                            flowControlTimeoutMessages.add(new TimeoutMessage(message, context, systemUsage
-                                    .getSendFailIfNoSpaceAfterTimeout()));
-                        }
-
-                        registerCallbackForNotFullNotification();
-                        context.setDontSendReponse(true);
-                        return;
+        message.incrementReferenceCount();
+        try {
+            if (memoryUsage.isFull() && messages.isCacheEnabled()) {
+                isFull(context, memoryUsage);
+                fastProducer(context, producerInfo);
+                if (isProducerFlowControl() && context.isProducerFlowControl()) {
+                    if (warnOnProducerFlowControl) {
+                        warnOnProducerFlowControl = false;
+                        LOG.info("Usage Manager Memory Limit ({}) reached (%{}) on {}, size {}. Producers will be throttled to the rate at which messages are removed from this destination to prevent flooding it. See http://activemq.apache.org/producer-flow-control.html for more info.",
+                                memoryUsage.getLimit(), memoryUsage.getPercentUsage(), getActiveMQDestination().getQualifiedName(), destinationStatistics.getMessages().getCount());
                     }
 
-                } else {
-
-                    if (memoryUsage.isFull()) {
-                        waitForSpace(context, producerExchange, memoryUsage, "Usage Manager Memory Limit reached. Producer ("
-                                + message.getProducerId() + ") stopped to prevent flooding "
+                    if (!context.isNetworkConnection() && systemUsage.isSendFailIfNoSpace()) {
+                        throw new ResourceAllocationException("Usage Manager Memory Limit reached. Stopping producer ("
+                                + message.getProducerId() + ") to prevent flooding "
                                 + getActiveMQDestination().getQualifiedName() + "."
                                 + " See http://activemq.apache.org/producer-flow-control.html for more info");
                     }
 
-                    // The usage manager could have delayed us by the time
-                    // we unblock the message could have expired..
-                    if (message.isExpired()) {
-                        LOG.debug("Expired message: {}", message);
-                        broker.getRoot().messageExpired(context, message, null);
-                        return;
+                    // We can avoid blocking due to low usage if the producer is
+                    // sending
+                    // a sync message or if it is using a producer window
+                    if (producerInfo.getWindowSize() > 0 || message.isResponseRequired()) {
+                        // copy the exchange state since the context will be
+                        // modified while we are waiting
+                        // for space.
+                        final ProducerBrokerExchange producerExchangeCopy = producerExchange.copy();
+                        synchronized (messagesWaitingForSpace) {
+                            // Start flow control timeout task
+                            // Prevent trying to start it multiple times
+                            if (!flowControlTimeoutTask.isAlive()) {
+                                flowControlTimeoutTask.setName(getName() + " Producer Flow Control Timeout Task");
+                                flowControlTimeoutTask.start();
+                            }
+                            messagesWaitingForSpace.put(message.getMessageId(), new Runnable() {
+                                @Override
+                                public void run() {
+
+                                    try {
+                                        // While waiting for space to free up... the
+                                        // message may have expired.
+                                        if (message.isExpired()) {
+                                            LOG.error("expired waiting for space..");
+                                            broker.messageExpired(context, message, null);
+                                            destinationStatistics.getExpired().increment();
+                                        } else {
+                                            doMessageSend(producerExchangeCopy, message);
+                                        }
+
+                                        if (sendProducerAck) {
+                                            ProducerAck ack = new ProducerAck(producerInfo.getProducerId(), message
+                                                    .getSize());
+                                            context.getConnection().dispatchAsync(ack);
+                                        } else {
+                                            Response response = new Response();
+                                            response.setCorrelationId(message.getCommandId());
+                                            context.getConnection().dispatchAsync(response);
+                                        }
+
+                                    } catch (Exception e) {
+                                        if (!sendProducerAck && !context.isInRecoveryMode() && !brokerService.isStopping()) {
+                                            ExceptionResponse response = new ExceptionResponse(e);
+                                            response.setCorrelationId(message.getCommandId());
+                                            context.getConnection().dispatchAsync(response);
+                                        } else {
+                                            LOG.debug("unexpected exception on deferred send of: {}", message, e);
+                                        }
+                                    }
+                                }
+                            });
+
+                            if (!context.isNetworkConnection() && systemUsage.getSendFailIfNoSpaceAfterTimeout() != 0) {
+                                flowControlTimeoutMessages.add(new TimeoutMessage(message, context, systemUsage
+                                        .getSendFailIfNoSpaceAfterTimeout()));
+                            }
+
+                            registerCallbackForNotFullNotification();
+                            context.setDontSendReponse(true);
+                            return;
+                        }
+
+                    } else {
+
+                        if (memoryUsage.isFull()) {
+                            waitForSpace(context, producerExchange, memoryUsage, "Usage Manager Memory Limit reached. Producer ("
+                                    + message.getProducerId() + ") stopped to prevent flooding "
+                                    + getActiveMQDestination().getQualifiedName() + "."
+                                    + " See http://activemq.apache.org/producer-flow-control.html for more info");
+                        }
+
+                        // The usage manager could have delayed us by the time
+                        // we unblock the message could have expired..
+                        if (message.isExpired()) {
+                            LOG.debug("Expired message: {}", message);
+                            broker.getRoot().messageExpired(context, message, null);
+                            return;
+                        }
                     }
                 }
             }
-        }
-        doMessageSend(producerExchange, message);
-        if (sendProducerAck) {
-            ProducerAck ack = new ProducerAck(producerInfo.getProducerId(), message.getSize());
-            context.getConnection().dispatchAsync(ack);
+            doMessageSend(producerExchange, message);
+            if (sendProducerAck) {
+                ProducerAck ack = new ProducerAck(producerInfo.getProducerId(), message.getSize());
+                context.getConnection().dispatchAsync(ack);
+            }
+        } finally {
+            message.decrementReferenceCount();
         }
     }
 
@@ -835,7 +837,7 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
                 try {
                     if (messages.isCacheEnabled()) {
                         result = store.asyncAddQueueMessage(context, message, isOptimizeStorage());
-                        result.addListener(new PendingMarshalUsageTracker(message));
+                        //result.addListener(new PendingMarshalUsageTracker(message));
                     } else {
                         store.addMessage(context, message);
                     }
@@ -954,20 +956,18 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
     @Override
     public String toString() {
         return destination.getQualifiedName() + ", subscriptions=" + consumers.size()
-                + ", memory=" + memoryUsage.getPercentUsage() + "%, size=" + destinationStatistics.getMessages().getCount() + ", pending="
+                + ", memory=" + memoryUsage + ", size=" + destinationStatistics.getMessages().getCount() + ", pending="
                 + indexOrderedCursorUpdates.size();
     }
 
     @Override
     public void start() throws Exception {
         if (started.compareAndSet(false, true)) {
-            if (memoryUsage != null) {
-                memoryUsage.start();
-            }
+            memoryUsage.start();
             if (systemUsage.getStoreUsage() != null) {
                 systemUsage.getStoreUsage().start();
             }
-            systemUsage.getMemoryUsage().addUsageListener(this);
+            memoryUsage.addUsageListener(this);
             messages.start();
             if (getExpireMessagesPeriod() > 0) {
                 scheduler.executePeriodically(expireMessagesTask, getExpireMessagesPeriod());
@@ -1186,7 +1186,7 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
         LOG.trace("max {}, alreadyPagedIn {}, messagesCount {}, memoryUsage {}%", new Object[]{max, alreadyPagedIn, messagesInQueue, memoryUsage.getPercentUsage()});
         return (alreadyPagedIn < max)
                 && (alreadyPagedIn < messagesInQueue)
-                && messages.hasSpace();
+                && messages.hasSpaceForMoreMessages();
     }
 
     private void addAll(Collection<? extends MessageReference> refs, List<Message> l, int max,
@@ -2299,7 +2299,7 @@ public class Queue extends BaseDestination implements Task, UsageListener, Index
 
     @Override
     public void onUsageChanged(@SuppressWarnings("rawtypes") Usage usage, int oldPercentUsage, int newPercentUsage) {
-        if (oldPercentUsage > newPercentUsage) {
+        if (oldPercentUsage > newPercentUsage && oldPercentUsage >= cursorMemoryHighWaterMark) {
             asyncWakeup();
         }
     }

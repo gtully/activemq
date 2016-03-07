@@ -161,7 +161,7 @@ public class QueueView extends DestinationView implements QueueViewMBean {
     public boolean doesCursorHaveSpace() {
         Queue queue = (Queue) destination;
         if (queue.getMessages() != null){
-            return queue.getMessages().hasSpace();
+            return queue.getMessages().hasSpaceForMoreMessages();
         }
         return false;
     }

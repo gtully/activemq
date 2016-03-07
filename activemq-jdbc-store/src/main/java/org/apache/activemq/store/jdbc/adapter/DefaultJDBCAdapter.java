@@ -644,6 +644,10 @@ public class DefaultJDBCAdapter implements JDBCAdapter {
                     }
                 }
             }
+            if (listener.hasSpace() && count < maxReturned) {
+                LOG.error("No space at count: " + count + ", of: " + maxReturned);
+            }
+
         } finally {
             cleanupExclusiveLock.readLock().unlock();
             close(rs);

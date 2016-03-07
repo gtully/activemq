@@ -44,6 +44,8 @@ import org.slf4j.LoggerFactory;
 public class MemoryLimitPfcTest extends TestSupport {
     private static final Logger LOG = LoggerFactory.getLogger(MemoryLimitPfcTest.class);
     final String payload = new String(new byte[100 * 1024]);
+    final String payload30k = new String(new byte[30 * 1024]);
+
     protected BrokerService broker;
 
     @Parameterized.Parameter
@@ -51,7 +53,7 @@ public class MemoryLimitPfcTest extends TestSupport {
 
     @Parameterized.Parameters(name="store={0}")
     public static Iterable<Object[]> getTestParameters() {
-        return Arrays.asList(new Object[][]{{PersistenceAdapterChoice.KahaDB}, {PersistenceAdapterChoice.LevelDB}, {PersistenceAdapterChoice.JDBC}});
+        return Arrays.asList(new Object[][]{{PersistenceAdapterChoice.KahaDB}, /*{PersistenceAdapterChoice.LevelDB}, {PersistenceAdapterChoice.JDBC} */});
     }
 
     protected BrokerService createBroker() throws Exception {
@@ -61,6 +63,7 @@ public class MemoryLimitPfcTest extends TestSupport {
 
         PolicyMap policyMap = new PolicyMap();
         PolicyEntry policyEntry = new PolicyEntry();
+        policyEntry.setLazyDispatch(true);
         policyEntry.setExpireMessagesPeriod(0); // when this fires it will consume 2*pageSize mem which will throw the test
         policyMap.put(new ActiveMQQueue(">"), policyEntry);
         broker.setDestinationPolicy(policyMap);
@@ -145,7 +148,7 @@ public class MemoryLimitPfcTest extends TestSupport {
         secondProducer.join();
 
         LOG.info("Broker usage: " + broker.getSystemUsage().getMemoryUsage());
-        assertTrue(broker.getSystemUsage().getMemoryUsage().getPercentUsage() <= 100);
+        assertTrue(broker.getSystemUsage().getMemoryUsage().getPercentUsage() <= 120);
 
         // let's make sure we can consume all messages
         for (int i = 1; i < 300; i++) {
@@ -169,7 +172,10 @@ public class MemoryLimitPfcTest extends TestSupport {
         final ProducerThread producer = new ProducerThread(sess, sess.createQueue("STORE.1")) {
             @Override
             protected Message createMessage(int i) throws Exception {
-                return session.createTextMessage(payload + "::" + i);
+                BytesMessage bytesMessage = session.createBytesMessage();
+                bytesMessage.writeBytes(payload.getBytes());
+                return bytesMessage;
+
             }
         };
         producer.setMessageCount(20);
@@ -177,7 +183,9 @@ public class MemoryLimitPfcTest extends TestSupport {
         final ProducerThread producer2 = new ProducerThread(sess, sess.createQueue("STORE.2")) {
             @Override
             protected Message createMessage(int i) throws Exception {
-                return session.createTextMessage(payload + "::" + i);
+                BytesMessage bytesMessage = session.createBytesMessage();
+                bytesMessage.writeBytes(payload.getBytes());
+                return bytesMessage;
             }
         };
         producer2.setMessageCount(20);
@@ -206,6 +214,104 @@ public class MemoryLimitPfcTest extends TestSupport {
             msg = consumer2.receive(5000);
             LOG.info("% mem usage: " + broker.getSystemUsage().getMemoryUsage().getPercentUsage());
             msg.acknowledge();
+        }
+    }
+
+
+    @Test(timeout = 120000)
+    public void testProduceConsumeFromTwoAfterCacheDisabledOnOne() throws Exception {
+
+        final ActiveMQQueue storeOne = new ActiveMQQueue("STORE.1");
+        final ActiveMQQueue storeTwo = new ActiveMQQueue("STORE.2");
+        final ActiveMQQueue storeThree = new ActiveMQQueue("STORE.3");
+
+        ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory("vm://localhost");
+        factory.setOptimizeAcknowledge(true);
+        Connection conn = factory.createConnection();
+        conn.start();
+        Session sess = conn.createSession(false, Session.CLIENT_ACKNOWLEDGE);
+        final ProducerThread producer = new ProducerThread(sess, storeOne) {
+            @Override
+            protected Message createMessage(int i) throws Exception {
+                BytesMessage bytesMessage = session.createBytesMessage();
+                bytesMessage.writeBytes(payload30k.getBytes());
+                return bytesMessage;
+            }
+        };
+        producer.setMessageCount(40);
+        producer.start();
+        producer.join();
+
+
+        final ProducerThread producer2 = new ProducerThread(sess, storeTwo) {
+            @Override
+            protected Message createMessage(int i) throws Exception {
+                BytesMessage bytesMessage = session.createBytesMessage();
+                bytesMessage.writeBytes(payload30k.getBytes());
+                return bytesMessage;
+            }
+        };
+        producer2.setMessageCount(40);
+        producer2.start();
+        producer2.join();
+
+
+        final ProducerThread producer3 = new ProducerThread(sess, storeThree) {
+            @Override
+            protected Message createMessage(int i) throws Exception {
+                BytesMessage bytesMessage = session.createBytesMessage();
+                bytesMessage.writeBytes(payload30k.getBytes());
+                return bytesMessage;
+            }
+        };
+        producer3.setMessageCount(40);
+        producer3.start();
+        producer3.join();
+
+
+        final Destination dest1 = broker.getDestination(storeOne);
+        LOG.info("Destination usage: " + dest1.getMemoryUsage());
+        int percentUsage = dest1.getMemoryUsage().getPercentUsage();
+        assertTrue("Should be less than 70% of limit but was: " + percentUsage, percentUsage <= 80);
+        LOG.info("Broker usage: " + broker.getSystemUsage().getMemoryUsage());
+        assertTrue(broker.getSystemUsage().getMemoryUsage().getPercentUsage() <= 80);
+
+        assertFalse("cache disabled on one", ((org.apache.activemq.broker.region.Queue) dest1).getMessages().isCacheEnabled());
+
+        final Destination dest2 = broker.getDestination(storeOne);
+        LOG.info("Destination usage: " + dest2.getMemoryUsage());
+        percentUsage = dest2.getMemoryUsage().getPercentUsage();
+        assertTrue("Should be less than 70% of limit but was: " + percentUsage, percentUsage <= 80);
+        LOG.info("Broker usage: " + broker.getSystemUsage().getMemoryUsage());
+        assertTrue(broker.getSystemUsage().getMemoryUsage().getPercentUsage() <= 80);
+
+        assertFalse("cache disabled on two", ((org.apache.activemq.broker.region.Queue) dest2).getMessages().isCacheEnabled());
+
+
+        LOG.info("before consumer2, broker % mem usage: " + broker.getSystemUsage().getMemoryUsage().getPercentUsage());
+
+        MessageConsumer consumer2 = sess.createConsumer(storeTwo);
+        for (int i=0; i<40; i++) {
+            Message msg = consumer2.receive(5000);
+            LOG.info("% mem usage: " + broker.getSystemUsage().getMemoryUsage().getPercentUsage());
+            assertNotNull("Got message consumer2", msg);
+
+            msg.acknowledge();
+        }
+
+        LOG.info("before consumer3, broker % mem usage: " + broker.getSystemUsage().getMemoryUsage().getPercentUsage());
+
+        MessageConsumer consumer3 = sess.createConsumer(storeThree);
+        for (int i=0; i<40; i++) {
+            Message msg = consumer3.receive(5000);
+            LOG.info("% mem usage: " + broker.getSystemUsage().getMemoryUsage().getPercentUsage());
+
+            assertNotNull("Got message consumer3: i=" + i, msg);
+            if (i > 0 && i%2 ==0) {
+                if (msg != null) {
+                    msg.acknowledge();
+                }
+            }
         }
 
     }

@@ -120,7 +120,7 @@ public class DurableSubscriptionView extends SubscriptionView implements Durable
 
     public boolean doesCursorHaveSpace() {
         if (durableSub != null && durableSub.getPending() != null) {
-            return durableSub.getPending().hasSpace();
+            return durableSub.getPending().hasSpaceForMoreMessages();
         }
         return false;
     }

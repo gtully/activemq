@@ -212,7 +212,7 @@ public interface PendingMessageCursor extends Service {
     /**
      * @return true if the cursor has space to page messages into
      */
-    public boolean hasSpace();
+    public boolean hasSpaceForMoreMessages();
 
     /**
      * @return true if the cursor has buffered messages ready to deliver
